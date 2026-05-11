@@ -1,0 +1,50 @@
+<!doctype html>
+<!--
+  Browser smoke test for paulstretch-wasm. Loads the ES module, instantiates
+  OfflineRenderer, runs a small render, and writes pass/fail status into the
+  DOM. CI grabs the page with `google-chrome --dump-dom` and asserts that
+  `data-status="ok"` appears.
+
+  Expects paulstretch.js + paulstretch.wasm to be served alongside this
+  file (CI stages them via `cp npm/dist/* tests/browser/`).
+-->
+<html>
+<head><meta charset="utf-8"><title>paulstretch wasm browser smoke test</title></head>
+<body>
+<pre id="out">running...</pre>
+<script type="module">
+const out = document.getElementById('out');
+const log = (...args) => out.textContent += '\n' + args.join(' ');
+const fail = (msg) => { out.textContent = 'FAIL ' + msg; out.dataset.status = 'fail'; };
+try {
+  const { default: PaulstretchModule } = await import('./paulstretch.js');
+  const M = await PaulstretchModule();
+  out.textContent = '';
+  log('backend:', M.fftBackendName());
+  log('simd:', M.fftSimdArch(), 'width:', M.fftSimdSize());
+
+  const r = new M.OfflineRenderer(4, 1024, 44100, M.Window.Hann, 0);
+  const input = new Float32Array(4410);
+  for (let i = 0; i < input.length; i++) {
+    input[i] = 0.5 * Math.sin(2 * Math.PI * 440 * i / 44100);
+  }
+  const flat = r.renderMono(input);
+  log('flat 4x: input', input.length, '-> output', flat.length);
+  if (flat.length <= input.length) throw new Error('output not stretched');
+
+  r.setStretchEnvelope(
+    new Float32Array([0, 0.5, 1]),
+    new Float32Array([1, 4, 1]),
+  );
+  const env = r.renderMono(input);
+  log('env 1->4->1: output', env.length);
+  if (env.length === flat.length) throw new Error('envelope did not change length');
+
+  r.delete();
+  out.dataset.status = 'ok';
+} catch (e) {
+  fail((e && e.message) + '\n' + (e && e.stack));
+}
+</script>
+</body>
+</html>

@@ -2,6 +2,10 @@ build/
 build-wasm/
 npm/dist/
 
+# Browser smoke-test staging — index.html is checked in, .js/.wasm aren't.
+tests/browser/paulstretch.js
+tests/browser/paulstretch.wasm
+
 # Manual listening-test outputs from /tmp/envelope_demo
 sine_in.wav
 sine_flat_10x.wav
