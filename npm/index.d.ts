@@ -49,8 +49,76 @@ export interface OfflineRendererConstructor {
   ): OfflineRenderer;
 }
 
+/**
+ * Result of one `StreamingStretcher.step()` call: an output chunk of
+ * `bufsize()` frames and the onset detection value.
+ */
+export interface StreamingStep {
+  output: Float32Array;
+  onset: number;
+}
+
+/**
+ * Block-based, push/pull stretching primitive for realtime use (e.g. from a
+ * Web Worker driving an AudioWorklet via a ring buffer). The protocol is:
+ *
+ *   1. Construct with the desired RenderOptions arguments.
+ *   2. Call `nextInputSize()` to learn how many input frames `step()` wants.
+ *      The first call returns `maxInputChunk()` (initial fill); subsequent
+ *      calls return either `0` or `bufsize()`.
+ *   3. Gather that many input frames (zero-pad if your source ran out).
+ *   4. Call `step(input, positionPct)` where `positionPct` is 0..100 for the
+ *      input cursor (used to evaluate the stretch envelope). Receive
+ *      `{ output, onset }` where output is a Float32Array of `bufsize()`
+ *      frames.
+ *   5. Advance your input cursor by `skipAfterStep()` frames after `step()`
+ *      (in addition to the frames already consumed).
+ */
+export interface StreamingStretcher {
+  /** Frames the next `step()` call expects: `maxInputChunk()` on first call, then `0` or `bufsize()`. */
+  nextInputSize(): number;
+
+  /** Output chunk size. Each `step()` returns this many frames. */
+  bufsize(): number;
+
+  /** Largest single input chunk (`3 * bufsize()`); used for the initial fill. */
+  maxInputChunk(): number;
+
+  /** Frames to skip in the caller's input cursor after `step()` (in addition to consumed frames). */
+  skipAfterStep(): number;
+
+  /**
+   * Advance one step.
+   * - `input`: Float32Array of `nextInputSize()` frames, or null/undefined if no input is needed.
+   * - `positionPct`: input cursor as percent 0..100; used to evaluate the stretch envelope.
+   */
+  step(input: Float32Array | null | undefined, positionPct: number): StreamingStep;
+
+  setStretchEnvelope(positions: Float32Array, values: Float32Array): void;
+  clearStretchEnvelope(): void;
+
+  setOnsetDetectionSensitivity(s: number): void;
+
+  /** Reset internal DSP state (seek/loop). Configuration and envelope are preserved. */
+  reset(): void;
+
+  /** Free the underlying C++ object. Failure to call this leaks WASM heap memory. */
+  delete(): void;
+}
+
+export interface StreamingStretcherConstructor {
+  new (
+    stretch: number,
+    fftSize: number,
+    sampleRate: number,
+    window: Window,
+    onsetDetectionSensitivity: number,
+  ): StreamingStretcher;
+}
+
 export interface PaulstretchModule {
   OfflineRenderer: OfflineRendererConstructor;
+  StreamingStretcher: StreamingStretcherConstructor;
   Window: typeof Window;
   fftBackendName(): string;
   fftSimdArch(): string;

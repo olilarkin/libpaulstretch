@@ -1,5 +1,5 @@
 build/
-build-wasm/
+build-*/
 npm/dist/
 
 # Browser smoke-test staging — index.html is checked in, .js/.wasm aren't.

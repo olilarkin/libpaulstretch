@@ -91,6 +91,16 @@ if (PAULSTRETCH_BUILD_TESTS AND NOT EMSCRIPTEN)
 		COMMAND paulstretch_render_test
 			${CMAKE_CURRENT_SOURCE_DIR}/tests/plenty_of_unknown.wav
 	)
+
+	add_executable(paulstretch_streaming_test tests/streaming_test.cpp)
+	target_link_libraries(paulstretch_streaming_test PRIVATE paulstretch_core)
+	target_include_directories(paulstretch_streaming_test PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/vendor/dr_libs
+	)
+	add_test(NAME paulstretch_streaming_test
+		COMMAND paulstretch_streaming_test
+			${CMAKE_CURRENT_SOURCE_DIR}/tests/plenty_of_unknown.wav
+	)
 endif()
 
 if (PAULSTRETCH_BUILD_EXAMPLES AND NOT EMSCRIPTEN)
