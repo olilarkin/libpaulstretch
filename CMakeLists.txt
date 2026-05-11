@@ -81,6 +81,16 @@ if (PAULSTRETCH_BUILD_TESTS AND NOT EMSCRIPTEN)
 	add_executable(paulstretch_smoke tests/smoke_test.cpp)
 	target_link_libraries(paulstretch_smoke PRIVATE paulstretch_core)
 	add_test(NAME paulstretch_smoke COMMAND paulstretch_smoke)
+
+	add_executable(paulstretch_render_test tests/render_test.cpp)
+	target_link_libraries(paulstretch_render_test PRIVATE paulstretch_core)
+	target_include_directories(paulstretch_render_test PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/vendor/dr_libs
+	)
+	add_test(NAME paulstretch_render_test
+		COMMAND paulstretch_render_test
+			${CMAKE_CURRENT_SOURCE_DIR}/tests/plenty_of_unknown.wav
+	)
 endif()
 
 if (PAULSTRETCH_BUILD_EXAMPLES AND NOT EMSCRIPTEN)

@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / ${{ matrix.backend }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            backend: PFFFT
+          - os: ubuntu-latest
+            backend: KISSFFT
+          - os: macos-latest
+            backend: PFFFT
+          - os: macos-latest
+            backend: KISSFFT
+          - os: macos-latest
+            backend: ACCELERATE
+          - os: windows-latest
+            backend: PFFFT
+          - os: windows-latest
+            backend: KISSFFT
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DPAULSTRETCH_FFT_BACKEND=${{ matrix.backend }}
+          -DPAULSTRETCH_BUILD_WASM=OFF
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -C Release
