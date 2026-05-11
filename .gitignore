@@ -1,2 +1,8 @@
 build/
 build-wasm/
+
+# Manual listening-test outputs from /tmp/envelope_demo
+sine_in.wav
+sine_flat_10x.wav
+sine_env.wav
+sweep_env.wav

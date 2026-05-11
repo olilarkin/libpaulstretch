@@ -44,3 +44,37 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure -C Release
+
+  wasm:
+    name: wasm (emscripten)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        simd: [ON, OFF]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+          actions-cache-folder: emsdk-cache
+
+      - name: Configure
+        run: >
+          emcmake cmake -S . -B build-wasm
+          -DCMAKE_BUILD_TYPE=Release
+          -DPAULSTRETCH_BUILD_WASM=ON
+          -DPAULSTRETCH_BUILD_TESTS=OFF
+          -DPAULSTRETCH_BUILD_EXAMPLES=OFF
+          -DPAULSTRETCH_ENABLE_SIMD=${{ matrix.simd }}
+
+      - name: Build
+        run: cmake --build build-wasm --config Release --parallel
+
+      - name: Verify artifacts
+        run: |
+          test -f build-wasm/dist/paulstretch.js
+          test -f build-wasm/dist/paulstretch.wasm
+          ls -la build-wasm/dist/
