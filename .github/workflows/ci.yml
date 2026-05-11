@@ -75,6 +75,24 @@ jobs:
 
       - name: Verify artifacts
         run: |
-          test -f build-wasm/dist/paulstretch.js
-          test -f build-wasm/dist/paulstretch.wasm
-          ls -la build-wasm/dist/
+          test -f npm/dist/paulstretch.js
+          test -f npm/dist/paulstretch.wasm
+          ls -la npm/dist/
+
+      # Only the SIMD=ON build (the production artifact) is packed; SIMD=OFF
+      # is just a build-compatibility check.
+      - name: npm pack (verify package layout)
+        if: matrix.simd == 'ON'
+        working-directory: npm
+        run: |
+          npm pack --dry-run
+          npm pack
+          ls -la *.tgz
+
+      - name: Upload npm tarball
+        if: matrix.simd == 'ON'
+        uses: actions/upload-artifact@v4
+        with:
+          name: paulstretch-wasm-npm
+          path: npm/*.tgz
+          if-no-files-found: error

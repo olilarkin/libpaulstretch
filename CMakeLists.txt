@@ -106,14 +106,17 @@ if (EMSCRIPTEN AND PAULSTRETCH_BUILD_WASM)
 	set_target_properties(paulstretch_wasm PROPERTIES
 		OUTPUT_NAME "paulstretch"
 		SUFFIX ".js"
-		RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/dist"
+		# Build straight into the npm package's dist/ so `npm pack` after a
+		# build produces a publishable tarball with no extra copying.
+		RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/npm/dist"
 	)
 
 	target_link_options(paulstretch_wasm PRIVATE
 		-O3
 		--bind
 		-sALLOW_MEMORY_GROWTH=1
-		-sENVIRONMENT=node
+		# Default ENVIRONMENT (web,webview,worker,node) — works in browsers,
+		# bundlers (Vite/Webpack), Node, and Web Workers.
 		-sEXPORT_ES6=1
 		-sFILESYSTEM=0
 		-sMODULARIZE=1

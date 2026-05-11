@@ -1,5 +1,6 @@
 build/
 build-wasm/
+npm/dist/
 
 # Manual listening-test outputs from /tmp/envelope_demo
 sine_in.wav
