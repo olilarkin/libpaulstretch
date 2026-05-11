@@ -161,33 +161,95 @@ void run_stereo_case(const Case &c, const Wav &input) {
           std::string(c.name) + ": stereo channel RMS within 50%");
 }
 
+// The envelope is a multiplier on options.stretch (used_rap = stretch_factor *
+// envelope_at(pos)). So a constant envelope of value k should produce the same
+// output length as a flat render at stretch * k. A linear ramp a -> b on a
+// uniform position axis averages (a+b)/2, so total output ≈ flat * (a+b)/2.
 void run_envelope_case(const Wav &input) {
-    std::cout << "\n[envelope case] linear ramp 2x -> 8x\n";
-    paulstretch::RenderOptions opts;
-    opts.stretch = 1.0f; // overridden by envelope
-    opts.fft_size = 2048;
-    opts.sample_rate = static_cast<float>(input.sample_rate);
-    opts.window = paulstretch::Window::Hann;
+    std::cout << "\n[envelope: constant multiplier semantics]\n";
+    paulstretch::RenderOptions base;
+    base.stretch = 2.0f;
+    base.fft_size = 2048;
+    base.sample_rate = static_cast<float>(input.sample_rate);
+    base.window = paulstretch::Window::Hann;
 
-    paulstretch::OfflineRenderer renderer_flat(opts);
-    paulstretch::OfflineRenderer renderer_env(opts);
-    renderer_env.set_stretch_envelope({{0.0f, 2.0f}, {1.0f, 8.0f}});
+    // Flat at stretch=2, vs stretch=2 with constant envelope multiplier 3
+    // (effective stretch = 6), vs flat at stretch=6.
+    paulstretch::OfflineRenderer r_flat2(base);
+    paulstretch::OfflineRenderer r_const_env(base);
+    r_const_env.set_stretch_envelope({{0.0f, 3.0f}, {1.0f, 3.0f}});
 
-    auto flat = renderer_flat.render_mono(input.left);
-    auto env  = renderer_env.render_mono(input.left);
+    paulstretch::RenderOptions flat6 = base;
+    flat6.stretch = 6.0f;
+    paulstretch::OfflineRenderer r_flat6(flat6);
 
-    const auto flat_stats = analyze(flat);
-    const auto env_stats  = analyze(env);
+    auto out_flat2     = r_flat2.render_mono(input.left);
+    auto out_const_env = r_const_env.render_mono(input.left);
+    auto out_flat6     = r_flat6.render_mono(input.left);
 
-    std::cout << "  flat frames=" << flat_stats.frames
-              << " env frames=" << env_stats.frames << '\n';
+    std::cout << "  flat stretch=2: " << out_flat2.size() << " frames\n";
+    std::cout << "  stretch=2 * env=3 const: " << out_const_env.size() << " frames\n";
+    std::cout << "  flat stretch=6: " << out_flat6.size() << " frames\n";
 
-    check(env_stats.all_finite, "envelope: output finite");
-    // Ramp 2 -> 8 should average roughly 5x; flat is 1x. Output must be longer.
-    check(env_stats.frames > flat_stats.frames * 3,
-          "envelope: ramp output longer than flat 1x by >3x");
-    check(env_stats.frames < flat_stats.frames * 10,
-          "envelope: ramp output not absurdly long");
+    check(out_const_env.size() == out_flat6.size(),
+          "envelope: constant=3 with base=2 matches flat=6 length");
+    // Multiplier semantics — length should be ~3x the base-2 length.
+    check(std::abs(static_cast<long>(out_const_env.size()) -
+                   static_cast<long>(out_flat2.size()) * 3) <=
+              static_cast<long>(base.fft_size),
+          "envelope: constant=3 length ~= 3x flat stretch=2 (within fft_size)");
+
+    std::cout << "\n[envelope: ramp integral]\n";
+    paulstretch::RenderOptions one = base;
+    one.stretch = 1.0f;
+    paulstretch::OfflineRenderer r_flat1(one);
+    paulstretch::OfflineRenderer r_ramp(one);
+    r_ramp.set_stretch_envelope({{0.0f, 2.0f}, {1.0f, 8.0f}});
+
+    auto out_flat1 = r_flat1.render_mono(input.left);
+    auto out_ramp  = r_ramp.render_mono(input.left);
+    const double avg_ratio = (2.0 + 8.0) / 2.0;            // = 5
+    const double expected  = out_flat1.size() * avg_ratio; // base=1 so flat1 ≈ input
+    const double rel_err   = std::fabs(static_cast<double>(out_ramp.size()) - expected) / expected;
+
+    std::cout << "  flat stretch=1: " << out_flat1.size() << " frames\n";
+    std::cout << "  ramp 2->8 (avg 5): " << out_ramp.size() << " frames (expected ~"
+              << static_cast<long>(expected) << ", rel_err=" << rel_err << ")\n";
+
+    check(analyze(out_ramp).all_finite, "envelope: ramp output finite");
+    check(rel_err < 0.05, "envelope: ramp length within 5% of integrated average");
+
+    std::cout << "\n[envelope: clear reverts to flat]\n";
+    paulstretch::OfflineRenderer r_cleared(base);
+    r_cleared.set_stretch_envelope({{0.0f, 4.0f}, {1.0f, 4.0f}});
+    auto with_env = r_cleared.render_mono(input.left);
+    r_cleared.clear_stretch_envelope();
+    auto without_env = r_cleared.render_mono(input.left);
+    check(without_env.size() == out_flat2.size(),
+          "envelope: after clear_stretch_envelope, length matches base flat");
+    check(with_env.size() > without_env.size(),
+          "envelope: envelope=4 produced longer output than its base");
+
+    std::cout << "\n[envelope: unsorted breakpoints]\n";
+    paulstretch::OfflineRenderer r_unsorted(one);
+    paulstretch::OfflineRenderer r_sorted(one);
+    r_unsorted.set_stretch_envelope({{1.0f, 8.0f}, {0.5f, 5.0f}, {0.0f, 2.0f}});
+    r_sorted  .set_stretch_envelope({{0.0f, 2.0f}, {0.5f, 5.0f}, {1.0f, 8.0f}});
+    auto out_unsorted = r_unsorted.render_mono(input.left);
+    auto out_sorted   = r_sorted.render_mono(input.left);
+    // Sample-level hash will differ — each Stretcher gets a fresh PRNG seed
+    // (static start_rand_seed_ advances per instance). Length is determined
+    // by envelope shape alone, so it should match.
+    check(out_unsorted.size() == out_sorted.size(),
+          "envelope: unsorted breakpoints produce same length as pre-sorted");
+
+    std::cout << "\n[envelope: stored copy is sorted]\n";
+    const auto &stored = r_unsorted.stretch_envelope();
+    bool monotonic = true;
+    for (std::size_t i = 1; i < stored.size(); i++) {
+        if (stored[i].position < stored[i - 1].position) { monotonic = false; break; }
+    }
+    check(monotonic, "envelope: stored envelope is monotonic in position");
 }
 
 void run_window_sweep(const Wav &input) {
