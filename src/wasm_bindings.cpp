@@ -134,6 +134,8 @@ public:
 
 	void clearStretchEnvelope() { inner_.clear_stretch_envelope(); }
 
+	void setStretchFactor(float stretch) { inner_.set_stretch_factor(stretch); }
+
 	void setOnsetDetectionSensitivity(float s) {
 		inner_.set_onset_detection_sensitivity(s);
 	}
@@ -173,6 +175,7 @@ EMSCRIPTEN_BINDINGS(paulstretch) {
 		.function("step", &WasmStreamingStretcher::step)
 		.function("setStretchEnvelope", &WasmStreamingStretcher::setStretchEnvelope)
 		.function("clearStretchEnvelope", &WasmStreamingStretcher::clearStretchEnvelope)
+		.function("setStretchFactor", &WasmStreamingStretcher::setStretchFactor)
 		.function("setOnsetDetectionSensitivity",
 		          &WasmStreamingStretcher::setOnsetDetectionSensitivity)
 		.function("reset", &WasmStreamingStretcher::reset);

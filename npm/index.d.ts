@@ -97,6 +97,9 @@ export interface StreamingStretcher {
   setStretchEnvelope(positions: Float32Array, values: Float32Array): void;
   clearStretchEnvelope(): void;
 
+  /** Hot-swap the base stretch factor without resetting DSP state. */
+  setStretchFactor(stretch: number): void;
+
   setOnsetDetectionSensitivity(s: number): void;
 
   /** Reset internal DSP state (seek/loop). Configuration and envelope are preserved. */

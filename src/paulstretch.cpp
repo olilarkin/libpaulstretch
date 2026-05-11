@@ -303,6 +303,16 @@ public:
         if (s < 1e-3f) extra_onset_time_credit_ = 0.0;
     }
 
+    // Hot-swap the stretch factor mid-stream. The next process() picks it up
+    // when computing how much input to advance over. No FFT state is reset,
+    // so output is continuous across the change.
+    void set_stretch_factor(float s) { stretch_factor_ = s; }
+
+    // Hot-swap the envelope pointer. `env` may be nullptr to disable the
+    // envelope; otherwise must outlive the next process() call. Updating
+    // the storage in-place under the existing pointer also works.
+    void set_envelope(const std::vector<Breakpoint> *env) { envelope_ = env; }
+
     int get_nsamples(float current_pos_percents) {
         if (freezing_) return 0;
         c_pos_percents_ = current_pos_percents;
@@ -581,16 +591,19 @@ void StreamingStretcher::set_stretch_envelope(std::vector<Breakpoint> envelope) 
     std::sort(envelope.begin(), envelope.end(),
               [](const Breakpoint &a, const Breakpoint &b) { return a.position < b.position; });
     impl_->envelope = std::move(envelope);
-    // Stretcher holds a raw pointer to the envelope vector. Rebuild so the
-    // new envelope is wired in cleanly. (Rebuilding also resets DSP state,
-    // which matches the offline behaviour where the renderer constructs a
-    // fresh Stretcher per render.)
-    impl_->rebuild();
+    // Hot-swap: update the inner Stretcher's envelope pointer in place.
+    // No DSP state reset, so audio stays continuous across the swap.
+    impl_->stretch->set_envelope(impl_->envelope.empty() ? nullptr : &impl_->envelope);
 }
 
 void StreamingStretcher::clear_stretch_envelope() {
     impl_->envelope.clear();
-    impl_->rebuild();
+    impl_->stretch->set_envelope(nullptr);
+}
+
+void StreamingStretcher::set_stretch_factor(float stretch) {
+    impl_->options.stretch = stretch;
+    impl_->stretch->set_stretch_factor(stretch);
 }
 
 const std::vector<Breakpoint> &StreamingStretcher::stretch_envelope() const {

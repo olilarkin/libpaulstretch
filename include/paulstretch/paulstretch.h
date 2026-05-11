@@ -93,6 +93,10 @@ public:
     void clear_stretch_envelope();
     const std::vector<Breakpoint> &stretch_envelope() const;
 
+    // Hot-swap the base stretch factor without resetting DSP state. The next
+    // step() picks up the new value (no audible discontinuity).
+    void set_stretch_factor(float stretch);
+
     void set_onset_detection_sensitivity(float s);
 
     // Reset internal DSP state (use for seek / loop). Configuration and
