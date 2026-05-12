@@ -89,6 +89,13 @@ public:
     // Writes bufsize() output frames to `output`. Returns the onset value.
     float step(const float *input, float position_pct, float *output);
 
+    // Variant for hosts that need to coordinate onset across channels. This
+    // runs one step and returns the detected onset, but does not feed it back
+    // into the stretch state. Call apply_onset() with the coordinated onset
+    // value before querying next_input_size() for the following step.
+    float step_without_onset_feedback(const float *input, float position_pct, float *output);
+    void apply_onset(float onset);
+
     void set_stretch_envelope(std::vector<Breakpoint> envelope);
     void clear_stretch_envelope();
     const std::vector<Breakpoint> &stretch_envelope() const;

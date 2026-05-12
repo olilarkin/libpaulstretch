@@ -572,6 +572,13 @@ int StreamingStretcher::next_input_size() const {
 int StreamingStretcher::skip_after_step() const { return impl_->skip_after; }
 
 float StreamingStretcher::step(const float *input, float position_pct, float *output) {
+    const float onset = step_without_onset_feedback(input, position_pct, output);
+    apply_onset(onset);
+    return onset;
+}
+
+float StreamingStretcher::step_without_onset_feedback(
+    const float *input, float position_pct, float *output) {
     Stretcher &s = *impl_->stretch;
     // Always record position so the envelope is evaluated at the caller's
     // current cursor — important for seek to land on the right envelope
@@ -581,10 +588,14 @@ float StreamingStretcher::step(const float *input, float position_pct, float *ou
     impl_->first_step = false;
 
     const float onset = s.process(n > 0 ? input : nullptr, n);
-    s.here_is_onset(onset);
     std::copy_n(s.out_buf, s.bufsize(), output);
     impl_->skip_after = s.get_skip_nsamples();
     return onset;
+}
+
+void StreamingStretcher::apply_onset(float onset) {
+    impl_->stretch->here_is_onset(onset);
+    impl_->skip_after = impl_->stretch->get_skip_nsamples();
 }
 
 void StreamingStretcher::set_stretch_envelope(std::vector<Breakpoint> envelope) {

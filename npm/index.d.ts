@@ -94,6 +94,15 @@ export interface StreamingStretcher {
    */
   step(input: Float32Array | null | undefined, positionPct: number): StreamingStep;
 
+  /**
+   * Advance one step without feeding the returned onset back into this
+   * stretcher. Multichannel hosts can call this on every channel, take the
+   * maximum onset, then call `applyOnset(maxOnset)` on every channel so their
+   * input protocol stays aligned.
+   */
+  stepWithoutOnsetFeedback(input: Float32Array | null | undefined, positionPct: number): StreamingStep;
+  applyOnset(onset: number): void;
+
   setStretchEnvelope(positions: Float32Array, values: Float32Array): void;
   clearStretchEnvelope(): void;
 

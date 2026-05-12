@@ -108,13 +108,26 @@ public:
 	// percent 0..100 for envelope evaluation. Returns an object:
 	//   { output: Float32Array(bufsize()), onset: number }
 	emscripten::val step(const emscripten::val &input, float position_pct) {
+		return stepImpl(input, position_pct, true);
+	}
+
+	emscripten::val stepWithoutOnsetFeedback(const emscripten::val &input, float position_pct) {
+		return stepImpl(input, position_pct, false);
+	}
+
+	void applyOnset(float onset) { inner_.apply_onset(onset); }
+
+private:
+	emscripten::val stepImpl(const emscripten::val &input, float position_pct, bool apply_onset) {
 		std::vector<float> in_local;
 		const float *in_ptr = nullptr;
 		if (!input.isNull() && !input.isUndefined()) {
 			in_local = from_js_array(input);
 			if (!in_local.empty()) in_ptr = in_local.data();
 		}
-		const float onset = inner_.step(in_ptr, position_pct, out_buf_.data());
+		const float onset = apply_onset
+			? inner_.step(in_ptr, position_pct, out_buf_.data())
+			: inner_.step_without_onset_feedback(in_ptr, position_pct, out_buf_.data());
 
 		emscripten::val result = emscripten::val::object();
 		result.set("output", to_js_float32_array(out_buf_));
@@ -122,6 +135,7 @@ public:
 		return result;
 	}
 
+public:
 	void setStretchEnvelope(const emscripten::val &xs, const emscripten::val &ys) {
 		const int n = std::min(xs["length"].as<int>(), ys["length"].as<int>());
 		std::vector<paulstretch::Breakpoint> envelope(n);
@@ -173,6 +187,9 @@ EMSCRIPTEN_BINDINGS(paulstretch) {
 		.function("nextInputSize", &WasmStreamingStretcher::nextInputSize)
 		.function("skipAfterStep", &WasmStreamingStretcher::skipAfterStep)
 		.function("step", &WasmStreamingStretcher::step)
+		.function("stepWithoutOnsetFeedback",
+		          &WasmStreamingStretcher::stepWithoutOnsetFeedback)
+		.function("applyOnset", &WasmStreamingStretcher::applyOnset)
 		.function("setStretchEnvelope", &WasmStreamingStretcher::setStretchEnvelope)
 		.function("clearStretchEnvelope", &WasmStreamingStretcher::clearStretchEnvelope)
 		.function("setStretchFactor", &WasmStreamingStretcher::setStretchFactor)

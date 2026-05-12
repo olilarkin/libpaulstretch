@@ -370,6 +370,33 @@ void test_reset_round_trip(const Wav &input) {
           "reset(): second pass output is finite");
 }
 
+void test_coordinated_onset_api() {
+    std::cout << "\n[onset] manual stereo coordination API\n";
+    paulstretch::RenderOptions opts{
+        .stretch = 4.0f, .fft_size = 2048, .sample_rate = 48000.0f,
+        .window = paulstretch::Window::Hann,
+        .onset_detection_sensitivity = 0.0f};
+
+    paulstretch::StreamingStretcher left(opts);
+    paulstretch::StreamingStretcher right(opts);
+    std::vector<float> impulse(left.max_input_chunk(), 0.0f);
+    std::vector<float> silence(right.max_input_chunk(), 0.0f);
+    std::vector<float> out_l(left.bufsize(), 0.0f);
+    std::vector<float> out_r(right.bufsize(), 0.0f);
+    impulse[0] = 1.0f;
+
+    left.step_without_onset_feedback(impulse.data(), 0.0f, out_l.data());
+    right.step_without_onset_feedback(silence.data(), 0.0f, out_r.data());
+
+    left.apply_onset(1.0f);
+    check(left.next_input_size() != right.next_input_size(),
+          "uncoordinated onset would split channel input protocol");
+
+    right.apply_onset(1.0f);
+    check(left.next_input_size() == right.next_input_size(),
+          "coordinated onset keeps channel input protocol aligned");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -391,6 +418,7 @@ int main(int argc, char **argv) {
     test_offline_vs_streaming(input);
     test_worklet_chunking_bit_exact(input);
     test_reset_round_trip(input);
+    test_coordinated_onset_api();
 
     std::cout << "\n" << (failures ? "FAILED" : "PASSED")
               << ": " << failures << " failure(s)\n";
