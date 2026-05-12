@@ -531,6 +531,7 @@ struct StreamingStretcher::Impl {
     RenderOptions options;
     std::vector<Breakpoint> envelope;
     std::unique_ptr<Stretcher> stretch;
+    float zero_input_sample = 0.0f;
     // `first_step` is true until the initial fill step has run. Drives
     // next_input_size()'s "max_input_chunk vs. {0, bufsize}" branch.
     bool first_step = true;
@@ -587,7 +588,11 @@ float StreamingStretcher::step_without_onset_feedback(
     const int n = impl_->first_step ? s.max_bufsize() : natural_n;
     impl_->first_step = false;
 
-    const float onset = s.process(n > 0 ? input : nullptr, n);
+    if (n > 0 && input == nullptr)
+        throw std::invalid_argument("input is required when next_input_size() > 0");
+
+    const float *process_input = n > 0 ? input : &impl_->zero_input_sample;
+    const float onset = s.process(process_input, n);
     std::copy_n(s.out_buf, s.bufsize(), output);
     impl_->skip_after = s.get_skip_nsamples();
     return onset;

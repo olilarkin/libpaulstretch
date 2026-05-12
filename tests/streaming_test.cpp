@@ -323,6 +323,39 @@ void test_worklet_chunking_bit_exact(const Wav &input) {
     check(analyze(worklet_511).all_finite, "worklet chunking (511/137) finite");
 }
 
+void test_zero_input_steps_resynthesize() {
+    std::cout << "\n[regression] zero-input hops resynthesize\n";
+    constexpr float sr = 44100.0f;
+    constexpr float pi = 3.14159265358979323846f;
+    paulstretch::RenderOptions opts{
+        .stretch = 55.0f, .fft_size = 512, .sample_rate = sr,
+        .window = paulstretch::Window::Hann,
+        .onset_detection_sensitivity = 0.0f};
+
+    paulstretch::StreamingStretcher s(opts);
+    std::vector<float> input(s.max_input_chunk(), 0.0f);
+    for (std::size_t i = 0; i < input.size(); ++i)
+        input[i] = 0.5f * std::sin(2.0f * pi * 220.0f * static_cast<float>(i) / sr);
+
+    std::vector<float> first(s.bufsize(), 0.0f);
+    std::vector<float> second(s.bufsize(), 0.0f);
+
+    s.step(input.data(), 0.0f, first.data());
+    check(s.next_input_size() == 0,
+          "stretch=55 requests no fresh input after initial fill");
+
+    s.step(nullptr, 0.0f, second.data());
+
+    float max_abs_diff = 0.0f;
+    for (std::size_t i = 0; i < first.size(); ++i)
+        max_abs_diff = std::max(max_abs_diff, std::fabs(first[i] - second[i]));
+
+    check(analyze(second).all_finite,
+          "zero-input hop output is finite");
+    check(max_abs_diff > 1e-7f,
+          "zero-input hop produces a fresh output block");
+}
+
 void test_reset_round_trip(const Wav &input) {
     std::cout << "\n[reset] reset() clears state\n";
     const float sr = static_cast<float>(input.sample_rate);
@@ -417,6 +450,7 @@ int main(int argc, char **argv) {
 
     test_offline_vs_streaming(input);
     test_worklet_chunking_bit_exact(input);
+    test_zero_input_steps_resynthesize();
     test_reset_round_trip(input);
     test_coordinated_onset_api();
 
