@@ -35,6 +35,11 @@ float envelope_at(const std::vector<Breakpoint> &env, float position) {
     return prev->value + t * (it->value - prev->value);
 }
 
+void sort_breakpoints(std::vector<Breakpoint> &points) {
+    std::sort(points.begin(), points.end(),
+              [](const Breakpoint &a, const Breakpoint &b) { return a.position < b.position; });
+}
+
 // ── FFT ────────────────────────────────────────────────────────────────────
 
 class FFT {
@@ -257,6 +262,314 @@ private:
 #endif
 };
 
+// ── Original Win32 spectral post-processing chain ──────────────────────────
+
+class SpectralProcessor {
+public:
+    void set_options(ProcessOptions options) { options_ = options; }
+    const ProcessOptions &options() const { return options_; }
+
+    void set_arbitrary_filter(std::vector<Breakpoint> filter) {
+        sort_breakpoints(filter);
+        arbitrary_filter_ = std::move(filter);
+    }
+
+    void clear_arbitrary_filter() { arbitrary_filter_.clear(); }
+    const std::vector<Breakpoint> &arbitrary_filter() const { return arbitrary_filter_; }
+
+    void process(float *freq, int nfreq, float sample_rate) {
+        if (!has_active_options()) return;
+        ensure_size(nfreq);
+
+        if (options_.harmonics_enabled) {
+            copy(freq, input_.data(), nfreq);
+            do_harmonics(input_.data(), freq, nfreq, sample_rate);
+        }
+        if (options_.tonal_noise_enabled) {
+            copy(freq, input_.data(), nfreq);
+            do_tonal_vs_noise(input_.data(), freq, nfreq, sample_rate);
+        }
+        if (options_.frequency_shift_enabled) {
+            copy(freq, input_.data(), nfreq);
+            do_freq_shift(input_.data(), freq, nfreq, sample_rate);
+        }
+        if (options_.pitch_shift_enabled) {
+            copy(freq, input_.data(), nfreq);
+            do_pitch_shift(input_.data(), freq, nfreq,
+                           std::pow(2.0f, options_.pitch_shift_cents / 1200.0f));
+        }
+        if (options_.octave_enabled) {
+            copy(freq, input_.data(), nfreq);
+            do_octave(input_.data(), freq, nfreq);
+        }
+        if (options_.spread_enabled) {
+            copy(freq, input_.data(), nfreq);
+            do_spread(input_.data(), freq, nfreq, sample_rate, options_.spread_bandwidth);
+        }
+        if (options_.filter_enabled) {
+            copy(freq, input_.data(), nfreq);
+            do_filter(input_.data(), freq, nfreq, sample_rate);
+        }
+        if (options_.arbitrary_filter_enabled && !arbitrary_filter_.empty()) {
+            copy(freq, input_.data(), nfreq);
+            do_arbitrary_filter(input_.data(), freq, nfreq, sample_rate);
+        }
+        if (options_.compressor_enabled) {
+            copy(freq, input_.data(), nfreq);
+            do_compressor(input_.data(), freq, nfreq);
+        }
+    }
+
+private:
+    bool has_active_options() const {
+        return options_.harmonics_enabled ||
+               options_.tonal_noise_enabled ||
+               options_.frequency_shift_enabled ||
+               options_.pitch_shift_enabled ||
+               options_.octave_enabled ||
+               options_.spread_enabled ||
+               options_.filter_enabled ||
+               (options_.arbitrary_filter_enabled && !arbitrary_filter_.empty()) ||
+               options_.compressor_enabled;
+    }
+
+    void ensure_size(int nfreq) {
+        if (static_cast<int>(input_.size()) == nfreq) return;
+        input_.assign(nfreq, 0.0f);
+        sum_.assign(nfreq, 0.0f);
+        tmp1_.assign(nfreq, 0.0f);
+        tmp2_.assign(nfreq, 0.0f);
+    }
+
+    static void copy(const float *src, float *dst, int nfreq) {
+        std::copy_n(src, nfreq, dst);
+    }
+
+    static void add(float *dst, const float *src, float scale, int nfreq) {
+        for (int i = 0; i < nfreq; i++) dst[i] += src[i] * scale;
+    }
+
+    static void zero(float *dst, int nfreq) {
+        std::fill_n(dst, nfreq, 0.0f);
+    }
+
+    static float profile(float fi, float bwi) {
+        const float x = (fi / bwi) * (fi / bwi);
+        if (x > 14.71280603f) return 0.0f;
+        return std::exp(-x);
+    }
+
+    void do_harmonics(const float *freq1, float *freq2, int nfreq, float sample_rate) {
+        float fundamental = options_.harmonics_frequency_hz;
+        const float bandwidth = options_.harmonics_bandwidth_cents;
+        const int harmonics = std::max(1, options_.harmonics_count);
+        if (fundamental < 10.0f) fundamental = 10.0f;
+
+        float *amp = tmp1_.data();
+        zero(amp, nfreq);
+
+        for (int nh = 1; nh <= harmonics; nh++) {
+            const float harmonic_hz = nh * fundamental;
+            if (harmonic_hz >= sample_rate * 0.5f) break;
+
+            const float bw_hz = (std::pow(2.0f, bandwidth / 1200.0f) - 1.0f) * harmonic_hz;
+            const float bwi = bw_hz / (2.0f * sample_rate);
+            if (bwi <= 0.0f) continue;
+            const float fi = harmonic_hz / sample_rate;
+
+            for (int i = 1; i < nfreq; i++) {
+                amp[i] += profile((i / static_cast<float>(nfreq) * 0.5f) - fi, bwi);
+            }
+        }
+
+        float max_amp = 0.0f;
+        for (int i = 1; i < nfreq; i++) max_amp = std::max(max_amp, amp[i]);
+        if (max_amp < 1e-8f) max_amp = 1e-8f;
+
+        for (int i = 1; i < nfreq; i++) {
+            float a = amp[i] / max_amp;
+            if (!options_.harmonics_gauss) a = (a < 0.368f ? 0.0f : 1.0f);
+            freq2[i] = freq1[i] * a;
+        }
+        if (nfreq > 0) freq2[0] = 0.0f;
+    }
+
+    void do_freq_shift(const float *freq1, float *freq2, int nfreq, float sample_rate) {
+        zero(freq2, nfreq);
+        const int bin_shift = static_cast<int>(
+            options_.frequency_shift_hz / (sample_rate * 0.5f) * nfreq);
+        for (int i = 0; i < nfreq; i++) {
+            const int dst = bin_shift + i;
+            if (dst > 0 && dst < nfreq) freq2[dst] = freq1[i];
+        }
+    }
+
+    static void do_pitch_shift(const float *freq1, float *freq2, int nfreq, float ratio) {
+        zero(freq2, nfreq);
+        if (ratio < 1.0f) {
+            for (int i = 0; i < nfreq; i++) {
+                const int dst = static_cast<int>(i * ratio);
+                if (dst >= nfreq) break;
+                freq2[dst] += freq1[i];
+            }
+        } else {
+            const float inv_ratio = 1.0f / ratio;
+            for (int i = 0; i < nfreq; i++) {
+                const int src = std::min(nfreq - 1, static_cast<int>(i * inv_ratio));
+                freq2[i] = freq1[src];
+            }
+        }
+    }
+
+    void do_octave(const float *freq1, float *freq2, int nfreq) {
+        zero(sum_.data(), nfreq);
+        if (options_.octave_minus2 > 1e-3f) {
+            do_pitch_shift(freq1, tmp1_.data(), nfreq, 0.25f);
+            add(sum_.data(), tmp1_.data(), options_.octave_minus2, nfreq);
+        }
+        if (options_.octave_minus1 > 1e-3f) {
+            do_pitch_shift(freq1, tmp1_.data(), nfreq, 0.5f);
+            add(sum_.data(), tmp1_.data(), options_.octave_minus1, nfreq);
+        }
+        if (options_.octave_0 > 1e-3f) {
+            add(sum_.data(), freq1, options_.octave_0, nfreq);
+        }
+        if (options_.octave_plus1 > 1e-3f) {
+            do_pitch_shift(freq1, tmp1_.data(), nfreq, 2.0f);
+            add(sum_.data(), tmp1_.data(), options_.octave_plus1, nfreq);
+        }
+        if (options_.octave_plus15 > 1e-3f) {
+            do_pitch_shift(freq1, tmp1_.data(), nfreq, 3.0f);
+            add(sum_.data(), tmp1_.data(), options_.octave_plus15, nfreq);
+        }
+        if (options_.octave_plus2 > 1e-3f) {
+            do_pitch_shift(freq1, tmp1_.data(), nfreq, 4.0f);
+            add(sum_.data(), tmp1_.data(), options_.octave_plus2, nfreq);
+        }
+
+        float sum = 0.01f + options_.octave_minus2 + options_.octave_minus1 +
+                    options_.octave_0 + options_.octave_plus1 +
+                    options_.octave_plus15 + options_.octave_plus2;
+        if (sum < 0.5f) sum = 0.5f;
+        for (int i = 0; i < nfreq; i++) freq2[i] = sum_[i] / sum;
+    }
+
+    void do_filter(const float *freq1, float *freq2, int nfreq, float sample_rate) {
+        const float low = std::min(options_.filter_low_hz, options_.filter_high_hz);
+        const float high = std::max(options_.filter_low_hz, options_.filter_high_hz);
+        const int ilow = static_cast<int>(low / sample_rate * nfreq * 2.0f);
+        const int ihigh = static_cast<int>(high / sample_rate * nfreq * 2.0f);
+        float damp = 1.0f;
+        const float damp_ratio = 1.0f - std::pow(options_.filter_high_damp * 0.5f, 4.0f);
+        for (int i = 0; i < nfreq; i++) {
+            float a = (i >= ilow && i < ihigh) ? 1.0f : 0.0f;
+            if (options_.filter_stop) a = 1.0f - a;
+            freq2[i] = freq1[i] * a * damp;
+            damp *= damp_ratio + 1e-8f;
+        }
+    }
+
+    void do_arbitrary_filter(const float *freq1, float *freq2, int nfreq, float sample_rate) {
+        constexpr float min_freq = 20.0f;
+        constexpr float max_freq = 25000.0f;
+        const float log_ratio = std::log(max_freq / min_freq);
+        for (int i = 0; i < nfreq; i++) {
+            const float hz = i / static_cast<float>(nfreq) * sample_rate * 0.5f;
+            float x = 0.0f;
+            if (hz > min_freq && log_ratio > 0.0f)
+                x = std::log(hz / min_freq) / log_ratio;
+            x = std::clamp(x, 0.0f, 1.0f);
+            freq2[i] = freq1[i] * envelope_at(arbitrary_filter_, x);
+        }
+    }
+
+    void do_spread(const float *freq1, float *freq2, int nfreq, float sample_rate, float bandwidth) {
+        const float min_freq = 20.0f;
+        const float max_freq = 0.5f * sample_rate;
+        if (max_freq <= min_freq || nfreq <= 1) {
+            copy(freq1, freq2, nfreq);
+            return;
+        }
+
+        const float log_minfreq = std::log(min_freq);
+        const float log_maxfreq = std::log(max_freq);
+        for (int i = 0; i < nfreq; i++) {
+            const float freqx = i / static_cast<float>(nfreq);
+            const float x = std::exp(log_minfreq + freqx * (log_maxfreq - log_minfreq))
+                          / max_freq * nfreq;
+            float y = 0.0f;
+            if (x < nfreq) {
+                const int x0 = std::min(nfreq - 1, static_cast<int>(std::floor(x)));
+                const int x1 = std::min(nfreq - 1, x0 + 1);
+                const float xp = x - x0;
+                y = freq1[x0] * (1.0f - xp) + freq1[x1] * xp;
+            }
+            tmp1_[i] = y;
+        }
+
+        const int passes = 2;
+        float a = 1.0f - std::pow(2.0f, -bandwidth * bandwidth * 10.0f);
+        a = std::pow(a, 8192.0f / nfreq * passes);
+        for (int k = 0; k < passes; k++) {
+            tmp1_[0] = 0.0f;
+            for (int i = 1; i < nfreq; i++) tmp1_[i] = tmp1_[i - 1] * a + tmp1_[i] * (1.0f - a);
+            tmp1_[nfreq - 1] = 0.0f;
+            for (int i = nfreq - 2; i > 0; i--) tmp1_[i] = tmp1_[i + 1] * a + tmp1_[i] * (1.0f - a);
+        }
+
+        freq2[0] = 0.0f;
+        const float log_maxfreq_d_minfreq = std::log(max_freq / min_freq);
+        for (int i = 1; i < nfreq; i++) {
+            const float freqx = i / static_cast<float>(nfreq);
+            const float x = std::log((freqx * max_freq) / min_freq) / log_maxfreq_d_minfreq * nfreq;
+            float y = 0.0f;
+            if (x > 0.0f && x < nfreq) {
+                const int x0 = std::min(nfreq - 1, static_cast<int>(std::floor(x)));
+                const int x1 = std::min(nfreq - 1, x0 + 1);
+                const float xp = x - x0;
+                y = tmp1_[x0] * (1.0f - xp) + tmp1_[x1] * xp;
+            }
+            freq2[i] = y;
+        }
+    }
+
+    void do_compressor(const float *freq1, float *freq2, int nfreq) {
+        float rms = 0.0f;
+        for (int i = 0; i < nfreq; i++) rms += freq1[i] * freq1[i];
+        rms = std::sqrt(rms / nfreq) * 0.1f;
+        if (rms < 1e-3f) rms = 1e-3f;
+
+        const float ratio = std::pow(rms, -options_.compressor_power);
+        for (int i = 0; i < nfreq; i++) freq2[i] = freq1[i] * ratio;
+    }
+
+    void do_tonal_vs_noise(const float *freq1, float *freq2, int nfreq, float sample_rate) {
+        do_spread(freq1, tmp1_.data(), nfreq, sample_rate, options_.tonal_noise_bandwidth);
+
+        if (options_.tonal_noise_preserve >= 0.0f) {
+            const float mul = std::pow(10.0f, options_.tonal_noise_preserve) - 1.0f;
+            for (int i = 0; i < nfreq; i++) {
+                const float smooth_x = tmp1_[i] + 1e-6f;
+                freq2[i] = std::max(0.0f, freq1[i] - smooth_x * mul);
+            }
+        } else {
+            const float mul = std::pow(5.0f, 1.0f + options_.tonal_noise_preserve) - 1.0f;
+            for (int i = 0; i < nfreq; i++) {
+                const float smooth_x = tmp1_[i] + 1e-6f;
+                const float result = freq1[i] - smooth_x * mul + 0.1f * mul;
+                freq2[i] = result < 0.0f ? freq1[i] : 0.0f;
+            }
+        }
+    }
+
+    ProcessOptions options_;
+    std::vector<Breakpoint> arbitrary_filter_;
+    std::vector<float> input_;
+    std::vector<float> sum_;
+    std::vector<float> tmp1_;
+    std::vector<float> tmp2_;
+};
+
 // ── Stretcher ──────────────────────────────────────────────────────────────
 
 class Stretcher {
@@ -312,6 +625,15 @@ public:
     // envelope; otherwise must outlive the next process() call. Updating
     // the storage in-place under the existing pointer also works.
     void set_envelope(const std::vector<Breakpoint> *env) { envelope_ = env; }
+    void set_process_options(ProcessOptions options) { spectral_.set_options(options); }
+    const ProcessOptions &process_options() const { return spectral_.options(); }
+    void set_arbitrary_filter(std::vector<Breakpoint> filter) {
+        spectral_.set_arbitrary_filter(std::move(filter));
+    }
+    void clear_arbitrary_filter() { spectral_.clear_arbitrary_filter(); }
+    const std::vector<Breakpoint> &arbitrary_filter() const {
+        return spectral_.arbitrary_filter();
+    }
 
     int get_nsamples(float current_pos_percents) {
         if (freezing_) return 0;
@@ -381,6 +703,7 @@ public:
             fft_->applywindow(window_);
             fft_->smp2freq();
             for (int i = 0; i < bufsize_; i++) outfft_->freq[i] = fft_->freq[i];
+            spectral_.process(outfft_->freq, bufsize_, sample_rate_);
 
             outfft_->freq2smp();
 
@@ -493,6 +816,7 @@ private:
     std::unique_ptr<FFT> infft_;
     std::unique_ptr<FFT> outfft_;
     std::unique_ptr<FFT> fft_;
+    SpectralProcessor spectral_;
 
     long double remained_samples_;
     long double extra_onset_time_credit_;
@@ -530,6 +854,8 @@ std::size_t clamp_advance(std::size_t cursor, int delta, std::size_t limit) {
 struct StreamingStretcher::Impl {
     RenderOptions options;
     std::vector<Breakpoint> envelope;
+    ProcessOptions process_options;
+    std::vector<Breakpoint> arbitrary_filter;
     std::unique_ptr<Stretcher> stretch;
     float zero_input_sample = 0.0f;
     // `first_step` is true until the initial fill step has run. Drives
@@ -549,6 +875,8 @@ struct StreamingStretcher::Impl {
             /*stereo_mode=*/0,
             envelope.empty() ? nullptr : &envelope);
         stretch->set_onset_detection_sensitivity(options.onset_detection_sensitivity);
+        stretch->set_process_options(process_options);
+        stretch->set_arbitrary_filter(arbitrary_filter);
         first_step = true;
         skip_after = 0;
     }
@@ -604,8 +932,7 @@ void StreamingStretcher::apply_onset(float onset) {
 }
 
 void StreamingStretcher::set_stretch_envelope(std::vector<Breakpoint> envelope) {
-    std::sort(envelope.begin(), envelope.end(),
-              [](const Breakpoint &a, const Breakpoint &b) { return a.position < b.position; });
+    sort_breakpoints(envelope);
     impl_->envelope = std::move(envelope);
     // Hot-swap: update the inner Stretcher's envelope pointer in place.
     // No DSP state reset, so audio stays continuous across the swap.
@@ -626,6 +953,30 @@ const std::vector<Breakpoint> &StreamingStretcher::stretch_envelope() const {
     return impl_->envelope;
 }
 
+void StreamingStretcher::set_process_options(ProcessOptions options) {
+    impl_->process_options = options;
+    impl_->stretch->set_process_options(options);
+}
+
+const ProcessOptions &StreamingStretcher::process_options() const {
+    return impl_->process_options;
+}
+
+void StreamingStretcher::set_arbitrary_filter(std::vector<Breakpoint> filter) {
+    sort_breakpoints(filter);
+    impl_->arbitrary_filter = std::move(filter);
+    impl_->stretch->set_arbitrary_filter(impl_->arbitrary_filter);
+}
+
+void StreamingStretcher::clear_arbitrary_filter() {
+    impl_->arbitrary_filter.clear();
+    impl_->stretch->clear_arbitrary_filter();
+}
+
+const std::vector<Breakpoint> &StreamingStretcher::arbitrary_filter() const {
+    return impl_->arbitrary_filter;
+}
+
 void StreamingStretcher::set_onset_detection_sensitivity(float s) {
     impl_->options.onset_detection_sensitivity = std::clamp(s, 0.0f, 1.0f);
     impl_->stretch->set_onset_detection_sensitivity(impl_->options.onset_detection_sensitivity);
@@ -642,11 +993,15 @@ namespace {
 std::vector<float> render_channel(
     const std::vector<float> &input,
     const RenderOptions &options,
-    const std::vector<Breakpoint> &envelope) {
+    const std::vector<Breakpoint> &envelope,
+    const ProcessOptions &process_options,
+    const std::vector<Breakpoint> &arbitrary_filter) {
     if (input.empty()) return {};
 
     StreamingStretcher stretch(options);
     if (!envelope.empty()) stretch.set_stretch_envelope(envelope);
+    stretch.set_process_options(process_options);
+    if (!arbitrary_filter.empty()) stretch.set_arbitrary_filter(arbitrary_filter);
 
     const int bufsize = stretch.bufsize();
     std::vector<float> out_chunk(bufsize, 0.0f);
@@ -730,8 +1085,7 @@ OfflineRenderer::OfflineRenderer(RenderOptions options)
     : options_(sanitize_options(options)) {}
 
 void OfflineRenderer::set_stretch_envelope(std::vector<Breakpoint> envelope) {
-    std::sort(envelope.begin(), envelope.end(),
-              [](const Breakpoint &a, const Breakpoint &b) { return a.position < b.position; });
+    sort_breakpoints(envelope);
     envelope_ = std::move(envelope);
 }
 
@@ -743,12 +1097,33 @@ const std::vector<Breakpoint> &OfflineRenderer::stretch_envelope() const {
     return envelope_;
 }
 
+void OfflineRenderer::set_process_options(ProcessOptions options) {
+    process_options_ = options;
+}
+
+const ProcessOptions &OfflineRenderer::process_options() const {
+    return process_options_;
+}
+
+void OfflineRenderer::set_arbitrary_filter(std::vector<Breakpoint> filter) {
+    sort_breakpoints(filter);
+    arbitrary_filter_ = std::move(filter);
+}
+
+void OfflineRenderer::clear_arbitrary_filter() {
+    arbitrary_filter_.clear();
+}
+
+const std::vector<Breakpoint> &OfflineRenderer::arbitrary_filter() const {
+    return arbitrary_filter_;
+}
+
 const RenderOptions &OfflineRenderer::options() const {
     return options_;
 }
 
 std::vector<float> OfflineRenderer::render_mono(const std::vector<float> &input) const {
-    return render_channel(input, options_, envelope_);
+    return render_channel(input, options_, envelope_, process_options_, arbitrary_filter_);
 }
 
 StereoBuffer OfflineRenderer::render_stereo(const std::vector<float> &left, const std::vector<float> &right) const {
@@ -760,6 +1135,12 @@ StereoBuffer OfflineRenderer::render_stereo(const std::vector<float> &left, cons
     if (!envelope_.empty()) {
         stretch_left.set_stretch_envelope(envelope_);
         stretch_right.set_stretch_envelope(envelope_);
+    }
+    stretch_left.set_process_options(process_options_);
+    stretch_right.set_process_options(process_options_);
+    if (!arbitrary_filter_.empty()) {
+        stretch_left.set_arbitrary_filter(arbitrary_filter_);
+        stretch_right.set_arbitrary_filter(arbitrary_filter_);
     }
 
     const int bufsize = stretch_left.bufsize();

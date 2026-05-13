@@ -22,6 +22,67 @@ emscripten::val to_js_float32_array(const std::vector<float> &input) {
 	return output;
 }
 
+template <typename T>
+T get_or(const emscripten::val &obj, const char *key, T fallback) {
+	emscripten::val v = obj[key];
+	if (v.isNull() || v.isUndefined()) return fallback;
+	return v.as<T>();
+}
+
+paulstretch::ProcessOptions process_options_from_js(const emscripten::val &obj) {
+	paulstretch::ProcessOptions options;
+	options.pitch_shift_enabled = get_or(obj, "pitchShiftEnabled", options.pitch_shift_enabled);
+	options.pitch_shift_cents = get_or(obj, "pitchShiftCents", options.pitch_shift_cents);
+
+	options.octave_enabled = get_or(obj, "octaveEnabled", options.octave_enabled);
+	options.octave_minus2 = get_or(obj, "octaveMinus2", options.octave_minus2);
+	options.octave_minus1 = get_or(obj, "octaveMinus1", options.octave_minus1);
+	options.octave_0 = get_or(obj, "octave0", options.octave_0);
+	options.octave_plus1 = get_or(obj, "octavePlus1", options.octave_plus1);
+	options.octave_plus15 = get_or(obj, "octavePlus15", options.octave_plus15);
+	options.octave_plus2 = get_or(obj, "octavePlus2", options.octave_plus2);
+
+	options.frequency_shift_enabled = get_or(obj, "frequencyShiftEnabled", options.frequency_shift_enabled);
+	options.frequency_shift_hz = get_or(obj, "frequencyShiftHz", options.frequency_shift_hz);
+
+	options.compressor_enabled = get_or(obj, "compressorEnabled", options.compressor_enabled);
+	options.compressor_power = get_or(obj, "compressorPower", options.compressor_power);
+
+	options.filter_enabled = get_or(obj, "filterEnabled", options.filter_enabled);
+	options.filter_low_hz = get_or(obj, "filterLowHz", options.filter_low_hz);
+	options.filter_high_hz = get_or(obj, "filterHighHz", options.filter_high_hz);
+	options.filter_high_damp = get_or(obj, "filterHighDamp", options.filter_high_damp);
+	options.filter_stop = get_or(obj, "filterStop", options.filter_stop);
+
+	options.harmonics_enabled = get_or(obj, "harmonicsEnabled", options.harmonics_enabled);
+	options.harmonics_frequency_hz = get_or(obj, "harmonicsFrequencyHz", options.harmonics_frequency_hz);
+	options.harmonics_bandwidth_cents = get_or(obj, "harmonicsBandwidthCents", options.harmonics_bandwidth_cents);
+	options.harmonics_count = get_or(obj, "harmonicsCount", options.harmonics_count);
+	options.harmonics_gauss = get_or(obj, "harmonicsGauss", options.harmonics_gauss);
+
+	options.spread_enabled = get_or(obj, "spreadEnabled", options.spread_enabled);
+	options.spread_bandwidth = get_or(obj, "spreadBandwidth", options.spread_bandwidth);
+
+	options.tonal_noise_enabled = get_or(obj, "tonalNoiseEnabled", options.tonal_noise_enabled);
+	options.tonal_noise_preserve = get_or(obj, "tonalNoisePreserve", options.tonal_noise_preserve);
+	options.tonal_noise_bandwidth = get_or(obj, "tonalNoiseBandwidth", options.tonal_noise_bandwidth);
+
+	options.arbitrary_filter_enabled = get_or(obj, "arbitraryFilterEnabled", options.arbitrary_filter_enabled);
+	return options;
+}
+
+std::vector<paulstretch::Breakpoint> breakpoints_from_js(
+	const emscripten::val &xs,
+	const emscripten::val &ys) {
+	const int n = std::min(xs["length"].as<int>(), ys["length"].as<int>());
+	std::vector<paulstretch::Breakpoint> points(n);
+	for (int i = 0; i < n; i++) {
+		points[i].position = xs[i].as<float>();
+		points[i].value = ys[i].as<float>();
+	}
+	return points;
+}
+
 class WasmOfflineRenderer {
 public:
 	WasmOfflineRenderer()
@@ -65,6 +126,18 @@ public:
 
 	void clearStretchEnvelope() {
 		renderer_.clear_stretch_envelope();
+	}
+
+	void setProcessOptions(const emscripten::val &options) {
+		renderer_.set_process_options(process_options_from_js(options));
+	}
+
+	void setArbitraryFilter(const emscripten::val &xs, const emscripten::val &ys) {
+		renderer_.set_arbitrary_filter(breakpoints_from_js(xs, ys));
+	}
+
+	void clearArbitraryFilter() {
+		renderer_.clear_arbitrary_filter();
 	}
 
 	std::size_t estimateOutputFrames(std::size_t input_frames) const {
@@ -137,16 +210,20 @@ private:
 
 public:
 	void setStretchEnvelope(const emscripten::val &xs, const emscripten::val &ys) {
-		const int n = std::min(xs["length"].as<int>(), ys["length"].as<int>());
-		std::vector<paulstretch::Breakpoint> envelope(n);
-		for (int i = 0; i < n; i++) {
-			envelope[i].position = xs[i].as<float>();
-			envelope[i].value = ys[i].as<float>();
-		}
-		inner_.set_stretch_envelope(std::move(envelope));
+		inner_.set_stretch_envelope(breakpoints_from_js(xs, ys));
 	}
 
 	void clearStretchEnvelope() { inner_.clear_stretch_envelope(); }
+
+	void setProcessOptions(const emscripten::val &options) {
+		inner_.set_process_options(process_options_from_js(options));
+	}
+
+	void setArbitraryFilter(const emscripten::val &xs, const emscripten::val &ys) {
+		inner_.set_arbitrary_filter(breakpoints_from_js(xs, ys));
+	}
+
+	void clearArbitraryFilter() { inner_.clear_arbitrary_filter(); }
 
 	void setStretchFactor(float stretch) { inner_.set_stretch_factor(stretch); }
 
@@ -178,7 +255,10 @@ EMSCRIPTEN_BINDINGS(paulstretch) {
 		.function("renderMono", &WasmOfflineRenderer::renderMono)
 		.function("renderStereo", &WasmOfflineRenderer::renderStereo)
 		.function("setStretchEnvelope", &WasmOfflineRenderer::setStretchEnvelope)
-		.function("clearStretchEnvelope", &WasmOfflineRenderer::clearStretchEnvelope);
+		.function("clearStretchEnvelope", &WasmOfflineRenderer::clearStretchEnvelope)
+		.function("setProcessOptions", &WasmOfflineRenderer::setProcessOptions)
+		.function("setArbitraryFilter", &WasmOfflineRenderer::setArbitraryFilter)
+		.function("clearArbitraryFilter", &WasmOfflineRenderer::clearArbitraryFilter);
 
 	emscripten::class_<WasmStreamingStretcher>("StreamingStretcher")
 		.constructor<float, int, float, paulstretch::Window, float>()
@@ -192,6 +272,9 @@ EMSCRIPTEN_BINDINGS(paulstretch) {
 		.function("applyOnset", &WasmStreamingStretcher::applyOnset)
 		.function("setStretchEnvelope", &WasmStreamingStretcher::setStretchEnvelope)
 		.function("clearStretchEnvelope", &WasmStreamingStretcher::clearStretchEnvelope)
+		.function("setProcessOptions", &WasmStreamingStretcher::setProcessOptions)
+		.function("setArbitraryFilter", &WasmStreamingStretcher::setArbitraryFilter)
+		.function("clearArbitraryFilter", &WasmStreamingStretcher::clearArbitraryFilter)
 		.function("setStretchFactor", &WasmStreamingStretcher::setStretchFactor)
 		.function("setOnsetDetectionSensitivity",
 		          &WasmStreamingStretcher::setOnsetDetectionSensitivity)

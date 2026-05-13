@@ -10,6 +10,38 @@ export enum Window {
   BlackmanHarris = 4,
 }
 
+export interface ProcessOptions {
+  pitchShiftEnabled?: boolean;
+  pitchShiftCents?: number;
+  octaveEnabled?: boolean;
+  octaveMinus2?: number;
+  octaveMinus1?: number;
+  octave0?: number;
+  octavePlus1?: number;
+  octavePlus15?: number;
+  octavePlus2?: number;
+  frequencyShiftEnabled?: boolean;
+  frequencyShiftHz?: number;
+  compressorEnabled?: boolean;
+  compressorPower?: number;
+  filterEnabled?: boolean;
+  filterLowHz?: number;
+  filterHighHz?: number;
+  filterHighDamp?: number;
+  filterStop?: boolean;
+  harmonicsEnabled?: boolean;
+  harmonicsFrequencyHz?: number;
+  harmonicsBandwidthCents?: number;
+  harmonicsCount?: number;
+  harmonicsGauss?: boolean;
+  spreadEnabled?: boolean;
+  spreadBandwidth?: number;
+  tonalNoiseEnabled?: boolean;
+  tonalNoisePreserve?: number;
+  tonalNoiseBandwidth?: number;
+  arbitraryFilterEnabled?: boolean;
+}
+
 /** Returned by `renderStereo`. */
 export interface StereoBuffer {
   left: Float32Array;
@@ -30,6 +62,9 @@ export interface OfflineRenderer {
    */
   setStretchEnvelope(positions: Float32Array, values: Float32Array): void;
   clearStretchEnvelope(): void;
+  setProcessOptions(options: ProcessOptions): void;
+  setArbitraryFilter(positions: Float32Array, values: Float32Array): void;
+  clearArbitraryFilter(): void;
 
   /**
    * Free the underlying C++ object. Failure to call this leaks WASM heap
@@ -105,6 +140,9 @@ export interface StreamingStretcher {
 
   setStretchEnvelope(positions: Float32Array, values: Float32Array): void;
   clearStretchEnvelope(): void;
+  setProcessOptions(options: ProcessOptions): void;
+  setArbitraryFilter(positions: Float32Array, values: Float32Array): void;
+  clearArbitraryFilter(): void;
 
   /** Hot-swap the base stretch factor without resetting DSP state. */
   setStretchFactor(stretch: number): void;

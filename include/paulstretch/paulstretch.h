@@ -14,6 +14,46 @@ struct Breakpoint {
     float value;    // stretch multiplier at this position
 };
 
+struct ProcessOptions {
+    bool pitch_shift_enabled = false;
+    int pitch_shift_cents = 0;
+
+    bool octave_enabled = false;
+    float octave_minus2 = 0.0f;
+    float octave_minus1 = 0.0f;
+    float octave_0 = 1.0f;
+    float octave_plus1 = 0.0f;
+    float octave_plus15 = 0.0f;
+    float octave_plus2 = 0.0f;
+
+    bool frequency_shift_enabled = false;
+    int frequency_shift_hz = 0;
+
+    bool compressor_enabled = false;
+    float compressor_power = 0.0f;
+
+    bool filter_enabled = false;
+    float filter_low_hz = 0.0f;
+    float filter_high_hz = 22000.0f;
+    float filter_high_damp = 0.0f;
+    bool filter_stop = false;
+
+    bool harmonics_enabled = false;
+    float harmonics_frequency_hz = 440.0f;
+    float harmonics_bandwidth_cents = 25.0f;
+    int harmonics_count = 10;
+    bool harmonics_gauss = false;
+
+    bool spread_enabled = false;
+    float spread_bandwidth = 0.3f;
+
+    bool tonal_noise_enabled = false;
+    float tonal_noise_preserve = 0.5f;
+    float tonal_noise_bandwidth = 0.9f;
+
+    bool arbitrary_filter_enabled = false;
+};
+
 struct RenderOptions {
     float stretch = 8.0f;
     int fft_size = 4096;
@@ -100,6 +140,12 @@ public:
     void clear_stretch_envelope();
     const std::vector<Breakpoint> &stretch_envelope() const;
 
+    void set_process_options(ProcessOptions options);
+    const ProcessOptions &process_options() const;
+    void set_arbitrary_filter(std::vector<Breakpoint> filter);
+    void clear_arbitrary_filter();
+    const std::vector<Breakpoint> &arbitrary_filter() const;
+
     // Hot-swap the base stretch factor without resetting DSP state. The next
     // step() picks up the new value (no audible discontinuity).
     void set_stretch_factor(float stretch);
@@ -123,6 +169,12 @@ public:
     void clear_stretch_envelope();
     const std::vector<Breakpoint> &stretch_envelope() const;
 
+    void set_process_options(ProcessOptions options);
+    const ProcessOptions &process_options() const;
+    void set_arbitrary_filter(std::vector<Breakpoint> filter);
+    void clear_arbitrary_filter();
+    const std::vector<Breakpoint> &arbitrary_filter() const;
+
     const RenderOptions &options() const;
 
     std::vector<float> render_mono(const std::vector<float> &input) const;
@@ -134,6 +186,8 @@ public:
 private:
     RenderOptions options_;
     std::vector<Breakpoint> envelope_;
+    ProcessOptions process_options_;
+    std::vector<Breakpoint> arbitrary_filter_;
 };
 
 } // namespace paulstretch

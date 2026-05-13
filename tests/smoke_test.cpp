@@ -70,6 +70,42 @@ int main() {
 		return EXIT_FAILURE;
 	}
 
+	paulstretch::ProcessOptions process;
+	process.pitch_shift_enabled = true;
+	process.pitch_shift_cents = 700;
+	process.octave_enabled = true;
+	process.octave_minus1 = 0.25f;
+	process.octave_0 = 1.0f;
+	process.octave_plus1 = 0.25f;
+	process.frequency_shift_enabled = true;
+	process.frequency_shift_hz = 10;
+	process.compressor_enabled = true;
+	process.compressor_power = 0.25f;
+	process.filter_enabled = true;
+	process.filter_low_hz = 80.0f;
+	process.filter_high_hz = 12000.0f;
+	process.harmonics_enabled = true;
+	process.harmonics_frequency_hz = 220.0f;
+	process.harmonics_bandwidth_cents = 50.0f;
+	process.harmonics_count = 12;
+	process.spread_enabled = true;
+	process.spread_bandwidth = 0.2f;
+	process.tonal_noise_enabled = true;
+	process.tonal_noise_preserve = 0.2f;
+	process.arbitrary_filter_enabled = true;
+
+	renderer.set_process_options(process);
+	renderer.set_arbitrary_filter({
+		{0.0f, 1.0f},
+		{0.5f, 0.5f},
+		{1.0f, 1.0f},
+	});
+	const auto processed_output = renderer.render_mono(mono_input);
+	if (processed_output.empty() || !all_finite(processed_output)) {
+		std::cerr << "processed render failed\n";
+		return EXIT_FAILURE;
+	}
+
 	std::cout << "mono_frames=" << mono_output.size()
 	          << " stereo_frames=" << stereo_output.left.size() << '\n';
 	return EXIT_SUCCESS;
