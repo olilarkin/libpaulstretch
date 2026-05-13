@@ -54,6 +54,15 @@ struct ProcessOptions {
     bool arbitrary_filter_enabled = false;
 };
 
+enum class BinauralStereoMode { LeftRight, RightLeft, Symmetric };
+
+struct BinauralBeatsOptions {
+    bool enabled = false;
+    BinauralStereoMode stereo_mode = BinauralStereoMode::LeftRight;
+    float mono = 0.5f;
+    float beat_frequency_hz = 8.0f;
+};
+
 struct RenderOptions {
     float stretch = 8.0f;
     int fft_size = 4096;
@@ -188,6 +197,28 @@ private:
     std::vector<Breakpoint> envelope_;
     ProcessOptions process_options_;
     std::vector<Breakpoint> arbitrary_filter_;
+};
+
+class BinauralBeatsProcessor {
+public:
+    explicit BinauralBeatsProcessor(float sample_rate);
+    ~BinauralBeatsProcessor();
+    BinauralBeatsProcessor(const BinauralBeatsProcessor &) = delete;
+    BinauralBeatsProcessor &operator=(const BinauralBeatsProcessor &) = delete;
+
+    void set_options(BinauralBeatsOptions options);
+    const BinauralBeatsOptions &options() const;
+
+    void set_frequency_envelope(std::vector<Breakpoint> envelope);
+    void clear_frequency_envelope();
+    const std::vector<Breakpoint> &frequency_envelope() const;
+
+    void process(float *left, float *right, int nframes, float position_pct);
+    void reset();
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 } // namespace paulstretch

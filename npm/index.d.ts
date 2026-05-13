@@ -10,6 +10,12 @@ export enum Window {
   BlackmanHarris = 4,
 }
 
+export enum BinauralStereoMode {
+  LeftRight = 0,
+  RightLeft = 1,
+  Symmetric = 2,
+}
+
 export interface ProcessOptions {
   pitchShiftEnabled?: boolean;
   pitchShiftCents?: number;
@@ -40,6 +46,13 @@ export interface ProcessOptions {
   tonalNoisePreserve?: number;
   tonalNoiseBandwidth?: number;
   arbitraryFilterEnabled?: boolean;
+}
+
+export interface BinauralBeatsOptions {
+  enabled?: boolean;
+  stereoMode?: BinauralStereoMode;
+  mono?: number;
+  beatFrequencyHz?: number;
 }
 
 /** Returned by `renderStereo`. */
@@ -166,10 +179,30 @@ export interface StreamingStretcherConstructor {
   ): StreamingStretcher;
 }
 
+export interface BinauralBeatsResult {
+  left: Float32Array;
+  right: Float32Array;
+}
+
+export interface BinauralBeatsProcessor {
+  setOptions(options: BinauralBeatsOptions): void;
+  setFrequencyEnvelope(positions: Float32Array, values: Float32Array): void;
+  clearFrequencyEnvelope(): void;
+  process(left: Float32Array, right: Float32Array, positionPct: number): BinauralBeatsResult;
+  reset(): void;
+  delete(): void;
+}
+
+export interface BinauralBeatsProcessorConstructor {
+  new (sampleRate: number): BinauralBeatsProcessor;
+}
+
 export interface PaulstretchModule {
   OfflineRenderer: OfflineRendererConstructor;
   StreamingStretcher: StreamingStretcherConstructor;
+  BinauralBeatsProcessor: BinauralBeatsProcessorConstructor;
   Window: typeof Window;
+  BinauralStereoMode: typeof BinauralStereoMode;
   fftBackendName(): string;
   fftSimdArch(): string;
   fftSimdSize(): number;

@@ -1,6 +1,7 @@
 #include "paulstretch/paulstretch.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -1079,6 +1080,173 @@ int fft_simd_size() {
 #else
     return 1;
 #endif
+}
+
+namespace {
+
+class AllPass {
+public:
+    AllPass(float coef = 0.5f) { set(coef); }
+
+    void set(float coef) { a_ = coef * coef; }
+
+    void reset() {
+        in1_ = 0.0f;
+        in2_ = 0.0f;
+        out1_ = 0.0f;
+        out2_ = 0.0f;
+    }
+
+    float process(float in) {
+        const float out = a_ * (in + out2_) - in2_;
+        in2_ = in1_;
+        in1_ = in;
+        out2_ = out1_;
+        out1_ = out;
+        return out;
+    }
+
+private:
+    float in1_ = 0.0f;
+    float in2_ = 0.0f;
+    float out1_ = 0.0f;
+    float out2_ = 0.0f;
+    float a_ = 0.25f;
+};
+
+class Hilbert {
+public:
+    Hilbert() { reset(); }
+
+    void reset() {
+        static constexpr std::array<float, 4> coef_l{
+            0.6923877778065f, 0.9360654322959f, 0.9882295226860f, 0.9987488452737f};
+        static constexpr std::array<float, 4> coef_r{
+            0.4021921162426f, 0.8561710882420f, 0.9722909545651f, 0.9952884791278f};
+
+        old_l_ = 0.0f;
+        for (std::size_t i = 0; i < apl_.size(); i++) {
+            apl_[i].set(coef_l[i]);
+            apr_[i].set(coef_r[i]);
+            apl_[i].reset();
+            apr_[i].reset();
+        }
+    }
+
+    void process(float in, float &out1, float &out2) {
+        out1 = old_l_;
+        out2 = in;
+        for (std::size_t i = 0; i < apl_.size(); i++) {
+            out1 = apl_[i].process(out1);
+            out2 = apr_[i].process(out2);
+        }
+        old_l_ = in;
+    }
+
+private:
+    std::array<AllPass, 4> apl_{};
+    std::array<AllPass, 4> apr_{};
+    float old_l_ = 0.0f;
+};
+
+} // anonymous namespace
+
+struct BinauralBeatsProcessor::Impl {
+    explicit Impl(float sr) : sample_rate(sr > 0.0f ? sr : 44100.0f) {}
+
+    float beat_frequency(float position_pct) const {
+        if (!frequency_envelope.empty())
+            return envelope_at(frequency_envelope, position_pct / 100.0f);
+        return options.beat_frequency_hz;
+    }
+
+    float sample_rate;
+    BinauralBeatsOptions options;
+    std::vector<Breakpoint> frequency_envelope;
+    float hilbert_t = 0.0f;
+    Hilbert left_hilbert;
+    Hilbert right_hilbert;
+};
+
+BinauralBeatsProcessor::BinauralBeatsProcessor(float sample_rate)
+    : impl_(std::make_unique<Impl>(sample_rate)) {}
+
+BinauralBeatsProcessor::~BinauralBeatsProcessor() = default;
+
+void BinauralBeatsProcessor::set_options(BinauralBeatsOptions options) {
+    options.mono = std::clamp(options.mono, 0.0f, 1.0f);
+    options.beat_frequency_hz = std::max(0.0f, options.beat_frequency_hz);
+    impl_->options = options;
+}
+
+const BinauralBeatsOptions &BinauralBeatsProcessor::options() const {
+    return impl_->options;
+}
+
+void BinauralBeatsProcessor::set_frequency_envelope(std::vector<Breakpoint> envelope) {
+    sort_breakpoints(envelope);
+    impl_->frequency_envelope = std::move(envelope);
+}
+
+void BinauralBeatsProcessor::clear_frequency_envelope() {
+    impl_->frequency_envelope.clear();
+}
+
+const std::vector<Breakpoint> &BinauralBeatsProcessor::frequency_envelope() const {
+    return impl_->frequency_envelope;
+}
+
+void BinauralBeatsProcessor::process(float *left, float *right, int nframes, float position_pct) {
+    if (!impl_->options.enabled || !left || !right || nframes <= 0) return;
+
+    const float mono = impl_->options.mono * 0.5f;
+    for (int i = 0; i < nframes; i++) {
+        const float in_l = left[i];
+        const float in_r = right[i];
+        left[i] = in_l * (1.0f - mono) + in_r * mono;
+        right[i] = in_r * (1.0f - mono) + in_l * mono;
+    }
+
+    const float freq = std::max(0.0f, impl_->beat_frequency(position_pct)) * 0.5f;
+    for (int i = 0; i < nframes; i++) {
+        impl_->hilbert_t = std::fmod(impl_->hilbert_t + freq / impl_->sample_rate, 1.0f);
+        const float x = impl_->hilbert_t * 2.0f * kPi;
+        const float c = std::cos(x);
+        const float s = std::sin(x);
+
+        float h1 = 0.0f;
+        float h2 = 0.0f;
+        impl_->left_hilbert.process(left[i], h1, h2);
+        const float out_l1 = h1 * c + h2 * s;
+        const float out_l2 = h1 * c - h2 * s;
+
+        h1 = 0.0f;
+        h2 = 0.0f;
+        impl_->right_hilbert.process(right[i], h1, h2);
+        const float out_r1 = h1 * c - h2 * s;
+        const float out_r2 = h1 * c + h2 * s;
+
+        switch (impl_->options.stereo_mode) {
+        case BinauralStereoMode::LeftRight:
+            left[i] = out_l2;
+            right[i] = out_r2;
+            break;
+        case BinauralStereoMode::RightLeft:
+            left[i] = out_l1;
+            right[i] = out_r1;
+            break;
+        case BinauralStereoMode::Symmetric:
+            left[i] = (out_l1 + out_r1) * 0.5f;
+            right[i] = (out_l2 + out_r2) * 0.5f;
+            break;
+        }
+    }
+}
+
+void BinauralBeatsProcessor::reset() {
+    impl_->hilbert_t = 0.0f;
+    impl_->left_hilbert.reset();
+    impl_->right_hilbert.reset();
 }
 
 OfflineRenderer::OfflineRenderer(RenderOptions options)

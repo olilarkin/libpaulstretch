@@ -106,6 +106,22 @@ int main() {
 		return EXIT_FAILURE;
 	}
 
+	paulstretch::BinauralBeatsProcessor binaural(options.sample_rate);
+	binaural.set_options({
+		.enabled = true,
+		.stereo_mode = paulstretch::BinauralStereoMode::Symmetric,
+		.mono = 0.5f,
+		.beat_frequency_hz = 8.0f,
+	});
+	std::vector<float> binaural_left = make_sine(2048, options.sample_rate, 220.0f);
+	std::vector<float> binaural_right = make_sine(2048, options.sample_rate, 330.0f);
+	binaural.process(binaural_left.data(), binaural_right.data(),
+	                 static_cast<int>(binaural_left.size()), 0.0f);
+	if (!all_finite(binaural_left) || !all_finite(binaural_right)) {
+		std::cerr << "binaural processor produced non-finite samples\n";
+		return EXIT_FAILURE;
+	}
+
 	std::cout << "mono_frames=" << mono_output.size()
 	          << " stereo_frames=" << stereo_output.left.size() << '\n';
 	return EXIT_SUCCESS;

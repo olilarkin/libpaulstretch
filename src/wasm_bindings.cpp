@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <stdexcept>
 #include <vector>
 
 #include <emscripten/bind.h>
@@ -238,6 +239,47 @@ private:
 	std::vector<float> out_buf_;
 };
 
+class WasmBinauralBeatsProcessor {
+public:
+	explicit WasmBinauralBeatsProcessor(float sample_rate)
+		: inner_(sample_rate) {}
+
+	void setOptions(const emscripten::val &obj) {
+		paulstretch::BinauralBeatsOptions options;
+		options.enabled = get_or(obj, "enabled", options.enabled);
+		options.stereo_mode = static_cast<paulstretch::BinauralStereoMode>(
+			get_or(obj, "stereoMode", static_cast<int>(options.stereo_mode)));
+		options.mono = get_or(obj, "mono", options.mono);
+		options.beat_frequency_hz = get_or(obj, "beatFrequencyHz", options.beat_frequency_hz);
+		inner_.set_options(options);
+	}
+
+	void setFrequencyEnvelope(const emscripten::val &xs, const emscripten::val &ys) {
+		inner_.set_frequency_envelope(breakpoints_from_js(xs, ys));
+	}
+
+	void clearFrequencyEnvelope() {
+		inner_.clear_frequency_envelope();
+	}
+
+	emscripten::val process(const emscripten::val &left, const emscripten::val &right, float position_pct) {
+		std::vector<float> l = from_js_array(left);
+		std::vector<float> r = from_js_array(right);
+		if (l.size() != r.size()) throw std::invalid_argument("left and right channel lengths must match");
+		inner_.process(l.data(), r.data(), static_cast<int>(l.size()), position_pct);
+
+		emscripten::val result = emscripten::val::object();
+		result.set("left", to_js_float32_array(l));
+		result.set("right", to_js_float32_array(r));
+		return result;
+	}
+
+	void reset() { inner_.reset(); }
+
+private:
+	paulstretch::BinauralBeatsProcessor inner_;
+};
+
 } // namespace
 
 EMSCRIPTEN_BINDINGS(paulstretch) {
@@ -247,6 +289,11 @@ EMSCRIPTEN_BINDINGS(paulstretch) {
 		.value("Hann", paulstretch::Window::Hann)
 		.value("Blackman", paulstretch::Window::Blackman)
 		.value("BlackmanHarris", paulstretch::Window::BlackmanHarris);
+
+	emscripten::enum_<paulstretch::BinauralStereoMode>("BinauralStereoMode")
+		.value("LeftRight", paulstretch::BinauralStereoMode::LeftRight)
+		.value("RightLeft", paulstretch::BinauralStereoMode::RightLeft)
+		.value("Symmetric", paulstretch::BinauralStereoMode::Symmetric);
 
 	emscripten::class_<WasmOfflineRenderer>("OfflineRenderer")
 		.constructor<>()
@@ -279,6 +326,14 @@ EMSCRIPTEN_BINDINGS(paulstretch) {
 		.function("setOnsetDetectionSensitivity",
 		          &WasmStreamingStretcher::setOnsetDetectionSensitivity)
 		.function("reset", &WasmStreamingStretcher::reset);
+
+	emscripten::class_<WasmBinauralBeatsProcessor>("BinauralBeatsProcessor")
+		.constructor<float>()
+		.function("setOptions", &WasmBinauralBeatsProcessor::setOptions)
+		.function("setFrequencyEnvelope", &WasmBinauralBeatsProcessor::setFrequencyEnvelope)
+		.function("clearFrequencyEnvelope", &WasmBinauralBeatsProcessor::clearFrequencyEnvelope)
+		.function("process", &WasmBinauralBeatsProcessor::process)
+		.function("reset", &WasmBinauralBeatsProcessor::reset);
 
 	emscripten::function("fftBackendName", &paulstretch::fft_backend_name);
 	emscripten::function("fftSimdArch", &paulstretch::fft_simd_arch);
