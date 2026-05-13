@@ -160,7 +160,7 @@ int width = paulstretch::fft_simd_size();              // 4
 ## Node.js / WASM usage
 
 ```js
-import createPaulstretchModule from "paulstretch-wasm";
+import createPaulstretchModule from "@olilarkin/paulstretch-wasm";
 
 const Module = await createPaulstretchModule();
 const renderer = new Module.OfflineRenderer(8.0, 4096, 48000, Module.Window.Hann, 0.0);

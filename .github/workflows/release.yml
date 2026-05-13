@@ -1,0 +1,75 @@
+name: Release
+
+# Tag-driven publish to GitHub Packages.
+#
+# To cut a release:
+#   1. Bump npm/package.json version (e.g. `npm version patch --no-git-tag-version` in npm/).
+#   2. Commit on main.
+#   3. Tag with `vX.Y.Z` matching that version and push: `git tag v0.2.0 && git push --tags`.
+#
+# The workflow verifies the tag matches npm/package.json version, builds the
+# WASM artifacts fresh, and publishes to https://npm.pkg.github.com under
+# @olilarkin/paulstretch-wasm.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    name: Publish to GitHub Packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@olilarkin'
+
+      - name: Verify tag matches package.json version
+        working-directory: npm
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "$PKG_VERSION" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} (${TAG}) does not match package.json version ${PKG_VERSION}"
+            exit 1
+          fi
+          echo "Publishing version ${PKG_VERSION}"
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+          actions-cache-folder: emsdk-cache
+
+      - name: Configure
+        run: >
+          emcmake cmake -S . -B build-wasm
+          -DCMAKE_BUILD_TYPE=Release
+          -DPAULSTRETCH_BUILD_WASM=ON
+          -DPAULSTRETCH_BUILD_TESTS=OFF
+          -DPAULSTRETCH_BUILD_EXAMPLES=OFF
+          -DPAULSTRETCH_ENABLE_SIMD=ON
+
+      - name: Build
+        run: cmake --build build-wasm --config Release --parallel
+
+      - name: Verify artifacts
+        run: |
+          test -f npm/dist/paulstretch.js
+          test -f npm/dist/paulstretch.wasm
+          ls -la npm/dist/
+
+      - name: Publish
+        working-directory: npm
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

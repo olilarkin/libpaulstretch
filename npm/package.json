@@ -1,5 +1,5 @@
 {
-  "name": "paulstretch-wasm",
+  "name": "@olilarkin/paulstretch-wasm",
   "version": "0.1.0",
   "description": "Paulstretch extreme time-stretching algorithm, compiled to WebAssembly via Emscripten",
   "type": "module",
@@ -41,5 +41,9 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
   }
 }

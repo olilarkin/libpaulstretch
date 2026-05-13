@@ -1,4 +1,4 @@
-# paulstretch-wasm
+# @olilarkin/paulstretch-wasm
 
 [Paulstretch](https://github.com/paulnasca/paulstretch_cpp) extreme time-stretching, compiled to WebAssembly. Works in Node, modern browsers, and Web Workers.
 
@@ -6,14 +6,27 @@ Includes an offline renderer, a realtime streaming primitive, optional spectral 
 
 ## Install
 
-```bash
-npm install paulstretch-wasm
-```
+This package is published to [GitHub Packages](https://github.com/olilarkin/libpaulstretch/pkgs/npm/paulstretch-wasm). Consumers need to authenticate to GitHub, even for read access while the repo is private.
+
+1. Create a [personal access token (classic)](https://github.com/settings/tokens/new) with the `read:packages` scope.
+2. Add this to your project's `.npmrc` (or `~/.npmrc` for global use):
+
+   ```ini
+   @olilarkin:registry=https://npm.pkg.github.com
+   //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+   ```
+
+3. Export the token in your environment, then install:
+
+   ```bash
+   export GITHUB_TOKEN=ghp_xxx
+   npm install @olilarkin/paulstretch-wasm
+   ```
 
 ## Offline rendering
 
 ```js
-import PaulstretchModule from 'paulstretch-wasm';
+import PaulstretchModule from '@olilarkin/paulstretch-wasm';
 
 const Module = await PaulstretchModule();
 
@@ -126,8 +139,8 @@ The beat frequency can be automated with `setFrequencyEnvelope(positions, values
 When bundling with Vite/Webpack/esbuild, the runtime may need help finding `paulstretch.wasm`:
 
 ```js
-import wasmUrl from 'paulstretch-wasm/paulstretch.wasm?url';
-import PaulstretchModule from 'paulstretch-wasm';
+import wasmUrl from '@olilarkin/paulstretch-wasm/paulstretch.wasm?url';
+import PaulstretchModule from '@olilarkin/paulstretch-wasm';
 
 const Module = await PaulstretchModule({
   locateFile: (path) => (path.endsWith('.wasm') ? wasmUrl : path),
