@@ -2,13 +2,15 @@
 
 [Paulstretch](https://github.com/paulnasca/paulstretch_cpp) extreme time-stretching, compiled to WebAssembly. Works in Node, modern browsers, and Web Workers.
 
+Includes an offline renderer, a realtime streaming primitive, optional spectral processing (pitch shift, octave mixer, frequency shift, compressor, filter, harmonics, spread, tonal-noise preservation, arbitrary filter), and a binaural-beats post-processor.
+
 ## Install
 
 ```bash
 npm install paulstretch-wasm
 ```
 
-## Usage
+## Offline rendering
 
 ```js
 import PaulstretchModule from 'paulstretch-wasm';
@@ -51,7 +53,75 @@ renderer.setStretchEnvelope(
 const out = renderer.renderMono(input);
 ```
 
-### Browser bundlers
+## Realtime streaming
+
+`StreamingStretcher` is a block-based push/pull primitive designed for AudioWorklets or Web Workers driving an audio thread via a ring buffer. The host gathers exactly the number of input frames the stretcher asks for, calls `step()` to produce one output chunk of `bufsize()` frames, then advances its input cursor by an additional `skipAfterStep()` frames:
+
+```js
+const s = new Module.StreamingStretcher(8, 4096, 44100, Module.Window.Hann, 0);
+
+// First call returns maxInputChunk() (= 3 * bufsize) for the initial fill.
+// Subsequent calls return either 0 or bufsize() depending on stretch factor
+// and onset detection.
+while (running) {
+  const want = s.nextInputSize();
+  const input = readFrames(want); // Float32Array; zero-pad if source ran out
+  const positionPct = 100 * cursor / totalInputFrames; // for envelope
+  const { output, onset } = s.step(input, positionPct);
+  writeFrames(output);
+  cursor += want + s.skipAfterStep();
+}
+s.delete();
+```
+
+`setStretchFactor(newRatio)` hot-swaps the base stretch without resetting DSP state. `reset()` clears state for seek/loop while preserving configuration.
+
+### Multichannel onset coordination
+
+To keep two streaming stretchers (one per channel) phase-aligned, use `stepWithoutOnsetFeedback()` on each, take the max of the returned onsets, then call `applyOnset(maxOnset)` on each before the next iteration.
+
+## Spectral processing
+
+`setProcessOptions` accepts a plain JS object with camelCase keys; unspecified fields keep their defaults:
+
+```js
+renderer.setProcessOptions({
+  pitchShiftEnabled: true,
+  pitchShiftCents: 700,        // up a perfect fifth
+
+  filterEnabled: true,
+  filterLowHz: 200,
+  filterHighHz: 4000,
+
+  harmonicsEnabled: true,
+  harmonicsFrequencyHz: 110,
+  harmonicsCount: 8,
+});
+```
+
+Available effects (each gated by a `*Enabled` flag): pitch shift, octave mixer (`octaveMinus2`/`Minus1`/`0`/`Plus1`/`Plus15`/`Plus2`), frequency shift, compressor, bandpass/notch filter, harmonics generator, stereo spread, tonal-noise preservation, and an arbitrary breakpoint-shaped filter (`setArbitraryFilter(positions, values)` + `arbitraryFilterEnabled`). See `index.d.ts` for the full `ProcessOptions` shape.
+
+Process options apply to both `OfflineRenderer` and `StreamingStretcher`.
+
+## Binaural beats
+
+Post-process stretched stereo output to add a sub-audio beat between L/R channels:
+
+```js
+const bb = new Module.BinauralBeatsProcessor(44100);
+bb.setOptions({
+  enabled: true,
+  stereoMode: Module.BinauralStereoMode.LeftRight,
+  mono: 0.5,             // mix toward mono before applying the beat
+  beatFrequencyHz: 8,    // alpha range
+});
+const { left, right } = bb.process(leftIn, rightIn, positionPct);
+bb.delete();
+```
+
+The beat frequency can be automated with `setFrequencyEnvelope(positions, values)`.
+
+## Browser bundlers
 
 When bundling with Vite/Webpack/esbuild, the runtime may need help finding `paulstretch.wasm`:
 
