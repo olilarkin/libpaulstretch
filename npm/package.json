@@ -1,6 +1,6 @@
 {
   "name": "@olilarkin/paulstretch-wasm",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "Paulstretch extreme time-stretching algorithm, compiled to WebAssembly via Emscripten",
   "type": "module",
   "main": "dist/paulstretch.js",
