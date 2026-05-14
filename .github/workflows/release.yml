@@ -2,14 +2,12 @@ name: Release
 
 # Tag-driven publish to GitHub Packages.
 #
-# To cut a release:
-#   1. Bump npm/package.json version (e.g. `npm version patch --no-git-tag-version` in npm/).
-#   2. Commit on main.
-#   3. Tag with `vX.Y.Z` matching that version and push: `git tag v0.2.0 && git push --tags`.
+# To cut a release, use `scripts/release.sh <patch|minor|major|X.Y.Z>` —
+# it bumps npm/package.json, commits, tags `vX.Y.Z`, and pushes.
 #
-# The workflow verifies the tag matches npm/package.json version, builds the
-# WASM artifacts fresh, and publishes to https://npm.pkg.github.com under
-# @olilarkin/paulstretch-wasm.
+# This workflow then verifies the tag matches npm/package.json version,
+# builds the WASM artifacts fresh, and publishes to
+# https://npm.pkg.github.com under @olilarkin/paulstretch-wasm.
 
 on:
   push:
