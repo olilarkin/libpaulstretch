@@ -1,0 +1,142 @@
+name: Release CLI
+
+# Tag-driven publish of the `paulstretch` CLI binary to a GitHub Release.
+#
+# To cut a release: push a tag matching `v*` (e.g. `git tag v0.2.0 && git push --tags`).
+# The same tag also drives the existing WASM/npm release workflow.
+#
+# `workflow_dispatch` runs the builds without creating a release — useful for
+# verifying the binary builds before tagging.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    name: Linux x86_64
+    # Older Ubuntu for broader glibc compatibility on user machines.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DPAULSTRETCH_FFT_BACKEND=PFFFT
+          -DPAULSTRETCH_BUILD_WASM=OFF
+          -DPAULSTRETCH_BUILD_TESTS=OFF
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Strip
+        run: strip build/paulstretch
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp build/paulstretch dist/
+          tar -C dist -czf paulstretch-${{ github.ref_name }}-linux-x86_64.tar.gz paulstretch
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paulstretch-linux-x86_64
+          path: paulstretch-${{ github.ref_name }}-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  build-macos:
+    name: macOS universal (x86_64 + arm64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        # PFFFT's NEON paths are guarded by `defined(__aarch64__)`, so the
+        # x86_64 slice safely skips them even with PFFFT_ENABLE_NEON set.
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
+          -DPAULSTRETCH_FFT_BACKEND=PFFFT
+          -DPAULSTRETCH_BUILD_WASM=OFF
+          -DPAULSTRETCH_BUILD_TESTS=OFF
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Verify universal
+        run: lipo -info build/paulstretch
+
+      - name: Strip
+        run: strip build/paulstretch
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp build/paulstretch dist/
+          tar -C dist -czf paulstretch-${{ github.ref_name }}-macos-universal.tar.gz paulstretch
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paulstretch-macos-universal
+          path: paulstretch-${{ github.ref_name }}-macos-universal.tar.gz
+          if-no-files-found: error
+
+  build-windows:
+    name: Windows x86_64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -A x64
+          -DCMAKE_BUILD_TYPE=Release
+          -DPAULSTRETCH_FFT_BACKEND=PFFFT
+          -DPAULSTRETCH_BUILD_WASM=OFF
+          -DPAULSTRETCH_BUILD_TESTS=OFF
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item build/Release/paulstretch.exe dist/
+          Compress-Archive -Path dist/paulstretch.exe -DestinationPath paulstretch-${{ github.ref_name }}-windows-x86_64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paulstretch-windows-x86_64
+          path: paulstretch-${{ github.ref_name }}-windows-x86_64.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-linux, build-macos, build-windows]
+    # Only publish on tag pushes; workflow_dispatch just verifies the builds.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
