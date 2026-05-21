@@ -159,77 +159,9 @@ int width = paulstretch::fft_simd_size();              // 4
 
 ## Node.js / WASM usage
 
-```js
-import createPaulstretchModule from "@olilarkin/paulstretch-wasm";
+The Emscripten build is published as [`@olilarkin/paulstretch-wasm`](https://github.com/olilarkin/libpaulstretch/pkgs/npm/paulstretch-wasm). See [`npm/README.md`](npm/README.md) for installation, the full JS API (offline, streaming, envelope, spectral processing, binaural beats), and bundler notes. Type definitions live in [`npm/index.d.ts`](npm/index.d.ts).
 
-const Module = await createPaulstretchModule();
-const renderer = new Module.OfflineRenderer(8.0, 4096, 48000, Module.Window.Hann, 0.0);
-
-const output = renderer.renderMono(input);
-const { left, right } = renderer.renderStereo(leftChannel, rightChannel);
-
-renderer.delete(); // embind objects are not GC'd
-```
-
-### Streaming
-
-```js
-const s = new Module.StreamingStretcher(8.0, 4096, 48000, Module.Window.Hann, 0.0);
-
-while (rendering) {
-    const want = s.nextInputSize();
-    const input = gatherFrames(want); // Float32Array, zero-pad if needed
-    const { output, onset } = s.step(input, positionPct);
-    writeFrames(output);
-    inputCursor += want + s.skipAfterStep();
-}
-s.delete();
-```
-
-For multichannel hosts that need synchronized onsets across channels, use `stepWithoutOnsetFeedback()` on every channel, take the max onset, then call `applyOnset()` on every channel before the next iteration.
-
-### Stretch envelope
-
-Pass parallel arrays of positions (0–1) and multiplier values:
-
-```js
-renderer.setStretchEnvelope(
-    new Float32Array([0, 0.5, 1.0]),
-    new Float32Array([1.0, 4.0, 1.0]),
-);
-const output = renderer.renderMono(input);
-renderer.clearStretchEnvelope();
-```
-
-### Spectral processing
-
-`setProcessOptions` accepts a plain JS object with camelCase keys (e.g. `pitchShiftEnabled`, `pitchShiftCents`, `filterEnabled`, `filterLowHz`); unspecified fields keep their defaults:
-
-```js
-renderer.setProcessOptions({
-    pitchShiftEnabled: true,
-    pitchShiftCents: 700,
-    filterEnabled: true,
-    filterLowHz: 200,
-    filterHighHz: 4000,
-});
-```
-
-See `npm/index.d.ts` for the full `ProcessOptions` shape.
-
-### Binaural beats
-
-```js
-const bb = new Module.BinauralBeatsProcessor(48000);
-bb.setOptions({
-    enabled: true,
-    stereoMode: Module.BinauralStereoMode.LeftRight,
-    mono: 0.5,
-    beatFrequencyHz: 8,
-});
-const { left, right } = bb.process(leftIn, rightIn, positionPct);
-bb.delete();
-```
+The C++ and JS APIs are 1:1 — JS methods use camelCase versions of the C++ names, and `setProcessOptions` accepts a plain object instead of a `ProcessOptions` struct.
 
 ## Notes
 
