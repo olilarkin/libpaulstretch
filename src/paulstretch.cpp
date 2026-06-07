@@ -991,13 +991,17 @@ namespace {
 
 // ── Offline render glue (built on StreamingStretcher) ──────────────────────
 
-std::vector<float> render_channel(
+// Core streaming loop: drives a StreamingStretcher over `input` and delivers
+// each `bufsize` output chunk to `sink` (never materialising the full output).
+// Both render_channel (whole-buffer) and render_mono_chunked build on this.
+void stream_channel(
     const std::vector<float> &input,
     const RenderOptions &options,
     const std::vector<Breakpoint> &envelope,
     const ProcessOptions &process_options,
-    const std::vector<Breakpoint> &arbitrary_filter) {
-    if (input.empty()) return {};
+    const std::vector<Breakpoint> &arbitrary_filter,
+    const OfflineRenderer::ChunkSink &sink) {
+    if (input.empty()) return;
 
     StreamingStretcher stretch(options);
     if (!envelope.empty()) stretch.set_stretch_envelope(envelope);
@@ -1007,8 +1011,6 @@ std::vector<float> render_channel(
     const int bufsize = stretch.bufsize();
     std::vector<float> out_chunk(bufsize, 0.0f);
     std::vector<float> in_chunk(stretch.max_input_chunk(), 0.0f);
-    std::vector<float> output;
-    output.reserve(static_cast<std::size_t>(std::ceil(input.size() * options.stretch)) + bufsize);
 
     std::size_t cursor = 0;
     bool first = true;
@@ -1030,12 +1032,96 @@ std::vector<float> render_channel(
         }
 
         stretch.step(want > 0 ? in_chunk.data() : nullptr, pos_pct, out_chunk.data());
-        output.insert(output.end(), out_chunk.begin(), out_chunk.end());
+        sink(out_chunk.data(), bufsize);
         cursor = clamp_advance(cursor, stretch.skip_after_step(), input.size());
         first = false;
     }
+}
+
+std::vector<float> render_channel(
+    const std::vector<float> &input,
+    const RenderOptions &options,
+    const std::vector<Breakpoint> &envelope,
+    const ProcessOptions &process_options,
+    const std::vector<Breakpoint> &arbitrary_filter) {
+    if (input.empty()) return {};
+
+    std::vector<float> output;
+    output.reserve(static_cast<std::size_t>(std::ceil(input.size() * options.stretch)) + options.fft_size);
+
+    stream_channel(input, options, envelope, process_options, arbitrary_filter,
+                   [&output](const float *data, int frames) {
+                       output.insert(output.end(), data, data + frames);
+                   });
 
     return output;
+}
+
+// Core streaming loop for stereo. Runs two StreamingStretchers in lockstep and
+// delivers each `bufsize` L/R chunk pair to `sink`. Both render_stereo and
+// render_stereo_chunked build on this.
+void stream_stereo(
+    const std::vector<float> &left,
+    const std::vector<float> &right,
+    const RenderOptions &options,
+    const std::vector<Breakpoint> &envelope,
+    const ProcessOptions &process_options,
+    const std::vector<Breakpoint> &arbitrary_filter,
+    const OfflineRenderer::StereoChunkSink &sink) {
+    StreamingStretcher stretch_left(options);
+    StreamingStretcher stretch_right(options);
+    if (!envelope.empty()) {
+        stretch_left.set_stretch_envelope(envelope);
+        stretch_right.set_stretch_envelope(envelope);
+    }
+    stretch_left.set_process_options(process_options);
+    stretch_right.set_process_options(process_options);
+    if (!arbitrary_filter.empty()) {
+        stretch_left.set_arbitrary_filter(arbitrary_filter);
+        stretch_right.set_arbitrary_filter(arbitrary_filter);
+    }
+
+    const int bufsize = stretch_left.bufsize();
+    std::vector<float> in_l(stretch_left.max_input_chunk(), 0.0f);
+    std::vector<float> in_r(stretch_right.max_input_chunk(), 0.0f);
+    std::vector<float> out_l(bufsize, 0.0f);
+    std::vector<float> out_r(bufsize, 0.0f);
+
+    bool first = true;
+    std::size_t cursor = 0;
+
+    while (true) {
+        const float pos_pct = 100.0f * static_cast<float>(cursor) / static_cast<float>(left.size());
+        const int want = first ? stretch_left.max_input_chunk() : stretch_left.next_input_size();
+
+        if (want > 0 && cursor >= left.size() && !first) break;
+
+        if (want > 0) {
+            const std::size_t avail = left.size() - cursor;
+            const std::size_t take = std::min<std::size_t>(avail, static_cast<std::size_t>(want));
+            std::copy_n(left.data() + cursor, take, in_l.data());
+            std::copy_n(right.data() + cursor, take, in_r.data());
+            if (take < static_cast<std::size_t>(want)) {
+                std::fill_n(in_l.data() + take, want - take, 0.0f);
+                std::fill_n(in_r.data() + take, want - take, 0.0f);
+            }
+            cursor += take;
+        }
+
+        // NB: we drop the per-channel onset coordination the previous offline
+        // path did (combining onset_l/onset_r with std::max and feeding both
+        // sides) because the StreamingStretcher's step() applies its own onset
+        // internally. For independent stereo channels with onset detection on,
+        // this means each side reacts to its own transients — usually the more
+        // correct behavior anyway.
+        stretch_left.step(want > 0 ? in_l.data() : nullptr, pos_pct, out_l.data());
+        stretch_right.step(want > 0 ? in_r.data() : nullptr, pos_pct, out_r.data());
+
+        sink(out_l.data(), out_r.data(), bufsize);
+
+        cursor = clamp_advance(cursor, stretch_left.skip_after_step(), left.size());
+        first = false;
+    }
 }
 
 } // anonymous namespace
@@ -1298,68 +1384,30 @@ StereoBuffer OfflineRenderer::render_stereo(const std::vector<float> &left, cons
     if (left.size() != right.size()) throw std::invalid_argument("left and right channel lengths must match");
     if (left.empty()) return {};
 
-    StreamingStretcher stretch_left(options_);
-    StreamingStretcher stretch_right(options_);
-    if (!envelope_.empty()) {
-        stretch_left.set_stretch_envelope(envelope_);
-        stretch_right.set_stretch_envelope(envelope_);
-    }
-    stretch_left.set_process_options(process_options_);
-    stretch_right.set_process_options(process_options_);
-    if (!arbitrary_filter_.empty()) {
-        stretch_left.set_arbitrary_filter(arbitrary_filter_);
-        stretch_right.set_arbitrary_filter(arbitrary_filter_);
-    }
-
-    const int bufsize = stretch_left.bufsize();
-    std::vector<float> in_l(stretch_left.max_input_chunk(), 0.0f);
-    std::vector<float> in_r(stretch_right.max_input_chunk(), 0.0f);
-    std::vector<float> out_l(bufsize, 0.0f);
-    std::vector<float> out_r(bufsize, 0.0f);
-
     StereoBuffer output;
     const std::size_t reserve = estimate_output_frames(left.size());
     output.left.reserve(reserve);
     output.right.reserve(reserve);
 
-    bool first = true;
-    std::size_t cursor = 0;
-
-    while (true) {
-        const float pos_pct = 100.0f * static_cast<float>(cursor) / static_cast<float>(left.size());
-        const int want = first ? stretch_left.max_input_chunk() : stretch_left.next_input_size();
-
-        if (want > 0 && cursor >= left.size() && !first) break;
-
-        if (want > 0) {
-            const std::size_t avail = left.size() - cursor;
-            const std::size_t take = std::min<std::size_t>(avail, static_cast<std::size_t>(want));
-            std::copy_n(left.data() + cursor, take, in_l.data());
-            std::copy_n(right.data() + cursor, take, in_r.data());
-            if (take < static_cast<std::size_t>(want)) {
-                std::fill_n(in_l.data() + take, want - take, 0.0f);
-                std::fill_n(in_r.data() + take, want - take, 0.0f);
-            }
-            cursor += take;
-        }
-
-        // NB: we drop the per-channel onset coordination the previous offline
-        // path did (combining onset_l/onset_r with std::max and feeding both
-        // sides) because the StreamingStretcher's step() applies its own onset
-        // internally. For independent stereo channels with onset detection on,
-        // this means each side reacts to its own transients — usually the more
-        // correct behavior anyway.
-        stretch_left.step(want > 0 ? in_l.data() : nullptr, pos_pct, out_l.data());
-        stretch_right.step(want > 0 ? in_r.data() : nullptr, pos_pct, out_r.data());
-
-        output.left.insert(output.left.end(), out_l.begin(), out_l.end());
-        output.right.insert(output.right.end(), out_r.begin(), out_r.end());
-
-        cursor = clamp_advance(cursor, stretch_left.skip_after_step(), left.size());
-        first = false;
-    }
+    stream_stereo(left, right, options_, envelope_, process_options_, arbitrary_filter_,
+                  [&output](const float *l, const float *r, int frames) {
+                      output.left.insert(output.left.end(), l, l + frames);
+                      output.right.insert(output.right.end(), r, r + frames);
+                  });
 
     return output;
+}
+
+void OfflineRenderer::render_mono_chunked(const std::vector<float> &input, const ChunkSink &sink) const {
+    stream_channel(input, options_, envelope_, process_options_, arbitrary_filter_, sink);
+}
+
+void OfflineRenderer::render_stereo_chunked(const std::vector<float> &left,
+                                            const std::vector<float> &right,
+                                            const StereoChunkSink &sink) const {
+    if (left.size() != right.size()) throw std::invalid_argument("left and right channel lengths must match");
+    if (left.empty()) return;
+    stream_stereo(left, right, options_, envelope_, process_options_, arbitrary_filter_, sink);
 }
 
 std::size_t OfflineRenderer::estimate_output_frames(std::size_t input_frames) const {

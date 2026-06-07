@@ -69,6 +69,23 @@ export interface OfflineRenderer {
   renderStereo(left: Float32Array, right: Float32Array): StereoBuffer;
 
   /**
+   * Chunked offline render — use this instead of `renderMono` for very long
+   * outputs (large stretch factors). The whole result of `renderMono` must live
+   * in WASM linear memory twice over (the C++ buffer plus the returned copy),
+   * so an hour-plus render can exceed the heap cap and abort. `renderMonoChunked`
+   * instead invokes `onChunk` with each ~`bufsize` slice; copy/accumulate it on
+   * the JS heap (or stream it to disk / an encoder) as it arrives. Peak WASM
+   * memory stays bounded regardless of output length. The Float32Array passed to
+   * `onChunk` is a fresh JS-heap copy you may keep. Returns the total frame count.
+   */
+  renderMonoChunked(input: Float32Array, onChunk: (chunk: Float32Array) => void): number;
+  renderStereoChunked(
+    left: Float32Array,
+    right: Float32Array,
+    onChunk: (left: Float32Array, right: Float32Array) => void,
+  ): number;
+
+  /**
    * Set a time-varying stretch multiplier. Positions are normalized 0..1
    * over the input duration; values are multipliers on the constructor's
    * `stretch` argument. Breakpoints are sorted internally.

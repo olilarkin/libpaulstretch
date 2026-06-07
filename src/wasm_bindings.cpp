@@ -17,10 +17,14 @@ std::vector<float> from_js_array(const emscripten::val &input) {
 	return samples;
 }
 
-emscripten::val to_js_float32_array(const std::vector<float> &input) {
-	emscripten::val output = emscripten::val::global("Float32Array").new_(input.size());
-	output.call<void>("set", emscripten::val(emscripten::typed_memory_view(input.size(), input.data())));
+emscripten::val to_js_float32_array(const float *data, std::size_t n) {
+	emscripten::val output = emscripten::val::global("Float32Array").new_(n);
+	output.call<void>("set", emscripten::val(emscripten::typed_memory_view(n, data)));
 	return output;
+}
+
+emscripten::val to_js_float32_array(const std::vector<float> &input) {
+	return to_js_float32_array(input.data(), input.size());
 }
 
 template <typename T>
@@ -113,6 +117,36 @@ public:
 		result.set("left", to_js_float32_array(stereo.left));
 		result.set("right", to_js_float32_array(stereo.right));
 		return result;
+	}
+
+	// Chunked offline render. Instead of returning one huge Float32Array (which
+	// for an hour-plus output would need to live in WASM linear memory twice over
+	// — the C++ vector plus the JS copy — and can blow the memory cap and abort),
+	// each ~bufsize() chunk is copied out to a fresh JS-heap Float32Array and
+	// handed to `onChunk`. Peak WASM memory stays ≈ input + one chunk; the full
+	// output accumulates on the JS side (or is streamed to disk / an encoder).
+	// Returns the total number of output frames delivered.
+	std::size_t renderMonoChunked(const emscripten::val &input, emscripten::val onChunk) const {
+		const std::vector<float> in = from_js_array(input);
+		std::size_t total = 0;
+		renderer_.render_mono_chunked(in, [&onChunk, &total](const float *data, int frames) {
+			onChunk(to_js_float32_array(data, static_cast<std::size_t>(frames)));
+			total += static_cast<std::size_t>(frames);
+		});
+		return total;
+	}
+
+	std::size_t renderStereoChunked(const emscripten::val &left, const emscripten::val &right,
+	                                emscripten::val onChunk) const {
+		const std::vector<float> l = from_js_array(left);
+		const std::vector<float> r = from_js_array(right);
+		std::size_t total = 0;
+		renderer_.render_stereo_chunked(l, r, [&onChunk, &total](const float *lc, const float *rc, int frames) {
+			onChunk(to_js_float32_array(lc, static_cast<std::size_t>(frames)),
+			        to_js_float32_array(rc, static_cast<std::size_t>(frames)));
+			total += static_cast<std::size_t>(frames);
+		});
+		return total;
 	}
 
 	void setStretchEnvelope(const emscripten::val &xs, const emscripten::val &ys) {
@@ -301,6 +335,8 @@ EMSCRIPTEN_BINDINGS(paulstretch) {
 		.function("estimateOutputFrames", &WasmOfflineRenderer::estimateOutputFrames)
 		.function("renderMono", &WasmOfflineRenderer::renderMono)
 		.function("renderStereo", &WasmOfflineRenderer::renderStereo)
+		.function("renderMonoChunked", &WasmOfflineRenderer::renderMonoChunked)
+		.function("renderStereoChunked", &WasmOfflineRenderer::renderStereoChunked)
 		.function("setStretchEnvelope", &WasmOfflineRenderer::setStretchEnvelope)
 		.function("clearStretchEnvelope", &WasmOfflineRenderer::clearStretchEnvelope)
 		.function("setProcessOptions", &WasmOfflineRenderer::setProcessOptions)

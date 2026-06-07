@@ -54,6 +54,29 @@ renderer.delete();
 const { left, right } = renderer.renderStereo(leftIn, rightIn);
 ```
 
+### Very long outputs (chunked rendering)
+
+`renderMono` returns the whole result in one `Float32Array`, which has to live in
+WebAssembly memory twice over (the internal buffer plus the returned copy). A large
+stretch — e.g. a few seconds stretched several hundred times into an hour-plus of
+audio — can exceed the WASM heap and abort. For those cases use `renderMonoChunked`
+(or `renderStereoChunked`): same algorithm, but the output is delivered one chunk at
+a time so peak WASM memory stays bounded regardless of length. Accumulate the chunks
+on the JS heap, or stream them straight to disk / an encoder.
+
+```js
+const chunks = [];
+const totalFrames = renderer.renderMonoChunked(input, (chunk) => {
+  // `chunk` is a fresh Float32Array you may keep (~fftSize frames).
+  chunks.push(chunk);
+});
+
+// Stereo: callback receives (left, right) per chunk.
+// const totalFrames = renderer.renderStereoChunked(leftIn, rightIn, (l, r) => { ... });
+
+renderer.delete();
+```
+
 ### Time-varying stretch (breakpoint envelope)
 
 Positions are normalized `0..1` over the input. Values multiply the `stretch` you passed to the constructor.
