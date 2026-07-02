@@ -66,6 +66,19 @@ auto [left, right] = renderer.render_stereo(left_in, right_in);
 
 Stereo rendering runs two independent stretchers but synchronizes onset detection across channels so they stay phase-aligned.
 
+#### Very long outputs (chunked rendering)
+
+`render_mono` returns the whole result in one `std::vector`. For an extreme stretch — a few seconds blown up several hundred times into an hour-plus of audio — that buffer can be enormous, and on the WebAssembly build it has to live in linear memory twice over (the C++ vector plus the returned `Float32Array`), which can exceed the WASM heap and abort. `render_mono_chunked` / `render_stereo_chunked` run the identical algorithm but hand each `bufsize()`-frame chunk to a sink as it is produced, so peak memory stays bounded regardless of output length:
+
+```cpp
+renderer.render_mono_chunked(input, [&](const float *data, int frames) {
+    // Consume the chunk — append to a buffer, write to disk, feed an encoder.
+});
+
+renderer.render_stereo_chunked(left_in, right_in,
+    [&](const float *left, const float *right, int frames) { /* ... */ });
+```
+
 ### Streaming (realtime) rendering
 
 `StreamingStretcher` is a block-based push/pull primitive for realtime hosts (audio callback, AudioWorklet, Web Worker). The host gathers exactly the number of input frames the stretcher asks for, calls `step()` to produce one output chunk, then advances its input cursor by the additional skip distance:

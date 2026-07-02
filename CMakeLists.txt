@@ -101,6 +101,10 @@ if (PAULSTRETCH_BUILD_TESTS AND NOT EMSCRIPTEN)
 		COMMAND paulstretch_streaming_test
 			${CMAKE_CURRENT_SOURCE_DIR}/tests/plenty_of_unknown.wav
 	)
+
+	add_executable(paulstretch_chunked_test tests/chunked_test.cpp)
+	target_link_libraries(paulstretch_chunked_test PRIVATE paulstretch_core)
+	add_test(NAME paulstretch_chunked_test COMMAND paulstretch_chunked_test)
 endif()
 
 if (PAULSTRETCH_BUILD_EXAMPLES AND NOT EMSCRIPTEN)
@@ -125,6 +129,11 @@ if (EMSCRIPTEN AND PAULSTRETCH_BUILD_WASM)
 		-O3
 		--bind
 		-sALLOW_MEMORY_GROWTH=1
+		# Raise the growth ceiling to the wasm32 maximum (4 GiB). Emscripten
+		# defaults to 2 GiB, which an hour-plus offline render can exceed and
+		# abort. For unbounded output lengths, prefer renderMonoChunked /
+		# renderStereoChunked, which keep linear memory bounded regardless.
+		-sMAXIMUM_MEMORY=4294967296
 		# Default ENVIRONMENT (web,webview,worker,node) — works in browsers,
 		# bundlers (Vite/Webpack), Node, and Web Workers.
 		-sEXPORT_ES6=1

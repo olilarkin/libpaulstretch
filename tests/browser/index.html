@@ -41,6 +41,31 @@ try {
   if (env.length === flat.length) throw new Error('envelope did not change length');
 
   r.delete();
+
+  // Chunked render: same algorithm as renderMono, delivered incrementally so
+  // huge outputs never need the whole buffer in WASM memory at once. Accumulate
+  // the chunks JS-side. Per-instance PRNG seed means the samples won't be
+  // bit-identical to `flat`, but the total length must match and the callback
+  // must fire repeatedly with finite data (proving the bounded-memory path).
+  const rc = new M.OfflineRenderer(4, 1024, 44100, M.Window.Hann, 0);
+  let chunkCount = 0;
+  let chunkFrames = 0;
+  let allFinite = true;
+  const total = rc.renderMonoChunked(input, (chunk) => {
+    chunkCount++;
+    chunkFrames += chunk.length;
+    for (let i = 0; i < chunk.length; i++) {
+      if (!Number.isFinite(chunk[i])) allFinite = false;
+    }
+  });
+  log('chunked 4x: output', total, 'in', chunkCount, 'chunks');
+  if (chunkCount < 2) throw new Error('expected multiple chunks, got ' + chunkCount);
+  if (!allFinite) throw new Error('chunked output had non-finite samples');
+  if (total !== chunkFrames || total !== flat.length) {
+    throw new Error('chunked length ' + total + ' != flat length ' + flat.length);
+  }
+  rc.delete();
+
   out.dataset.status = 'ok';
 } catch (e) {
   fail((e && e.message) + '\n' + (e && e.stack));

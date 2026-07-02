@@ -48,22 +48,14 @@ jobs:
           version: latest
           actions-cache-folder: emsdk-cache
 
-      - name: Configure
-        run: >
-          emcmake cmake -S . -B build-wasm
-          -DCMAKE_BUILD_TYPE=Release
-          -DPAULSTRETCH_BUILD_WASM=ON
-          -DPAULSTRETCH_BUILD_TESTS=OFF
-          -DPAULSTRETCH_BUILD_EXAMPLES=OFF
-          -DPAULSTRETCH_ENABLE_SIMD=ON
-
-      - name: Build
-        run: cmake --build build-wasm --config Release --parallel
+      - name: Build WASM (SIMD + scalar)
+        run: scripts/build-wasm.sh
 
       - name: Verify artifacts
         run: |
           test -f npm/dist/paulstretch.js
           test -f npm/dist/paulstretch.wasm
+          test -f npm/dist/paulstretch.nosimd.wasm
           ls -la npm/dist/
 
       - name: Publish

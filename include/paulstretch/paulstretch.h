@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -189,6 +190,22 @@ public:
     std::vector<float> render_mono(const std::vector<float> &input) const;
     StereoBuffer render_stereo(const std::vector<float> &left,
                                const std::vector<float> &right) const;
+
+    // Chunked offline rendering. Identical algorithm to render_mono/render_stereo,
+    // but instead of materialising the whole output in one buffer the result is
+    // delivered to `sink` one chunk at a time (each chunk is `bufsize()` frames).
+    // This keeps peak memory bounded regardless of stretch factor / output length
+    // — essential for the WASM build, whose linear memory is capped well below the
+    // size an hour-plus render would otherwise need. The pointers passed to `sink`
+    // are only valid for the duration of the call; copy out anything you keep.
+    using ChunkSink = std::function<void(const float *data, int frames)>;
+    using StereoChunkSink =
+        std::function<void(const float *left, const float *right, int frames)>;
+    void render_mono_chunked(const std::vector<float> &input,
+                             const ChunkSink &sink) const;
+    void render_stereo_chunked(const std::vector<float> &left,
+                               const std::vector<float> &right,
+                               const StereoChunkSink &sink) const;
 
     std::size_t estimate_output_frames(std::size_t input_frames) const;
 
