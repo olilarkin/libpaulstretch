@@ -170,13 +170,44 @@ const Module = await PaulstretchModule({
 });
 ```
 
+### SIMD and the scalar fallback
+
+The primary `paulstretch.wasm` is built with WASM SIMD (`-msimd128`) for a faster
+FFT. Some WebViews can't parse a SIMD module — notably macOS **WKWebView before
+Safari 16.4 / macOS 13** — and fail to compile it at all. The package therefore
+also ships a scalar build, `paulstretch.nosimd.wasm`, with no SIMD opcodes.
+
+Feature-detect SIMD at runtime and load the matching binary. Both wasm are built
+with the same Emscripten version, so the single glue drives either one:
+
+```js
+import simdUrl from '@olilarkin/paulstretch-wasm/paulstretch.wasm?url';
+import scalarUrl from '@olilarkin/paulstretch-wasm/paulstretch.nosimd.wasm?url';
+import PaulstretchModule from '@olilarkin/paulstretch-wasm';
+
+// A tiny module containing a v128 local; validate() never throws.
+const SIMD_PROBE = new Uint8Array([
+  0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,10,1,8,0,65,0,253,15,253,98,11,
+]);
+const hasSimd = WebAssembly.validate(SIMD_PROBE);
+const wasmUrl = hasSimd ? simdUrl : scalarUrl;
+
+const Module = await PaulstretchModule({
+  locateFile: (path) => (path.endsWith('.wasm') ? wasmUrl : path),
+});
+// Module.fftSimdArch() reports "WASM_SIMD128" or "4xScalar".
+```
+
 ## Building from source
 
 ```bash
-emcmake cmake -S . -B build-wasm
-cmake --build build-wasm
-# outputs land in npm/dist/
+# Build both the SIMD and scalar wasm and assemble npm/dist/:
+scripts/build-wasm.sh
 cd npm && npm pack
+
+# Or a single (SIMD) build directly:
+emcmake cmake -S . -B build-wasm
+cmake --build build-wasm            # outputs land in npm/dist/
 ```
 
 ## License

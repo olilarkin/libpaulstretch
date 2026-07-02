@@ -48,10 +48,6 @@ jobs:
   wasm:
     name: wasm (emscripten)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        simd: [ON, OFF]
     steps:
       - uses: actions/checkout@v4
 
@@ -61,28 +57,19 @@ jobs:
           version: latest
           actions-cache-folder: emsdk-cache
 
-      - name: Configure
-        run: >
-          emcmake cmake -S . -B build-wasm
-          -DCMAKE_BUILD_TYPE=Release
-          -DPAULSTRETCH_BUILD_WASM=ON
-          -DPAULSTRETCH_BUILD_TESTS=OFF
-          -DPAULSTRETCH_BUILD_EXAMPLES=OFF
-          -DPAULSTRETCH_ENABLE_SIMD=${{ matrix.simd }}
-
-      - name: Build
-        run: cmake --build build-wasm --config Release --parallel
+      # Builds both the SIMD and scalar wasm and assembles npm/dist. The scalar
+      # (paulstretch.nosimd.wasm) is the fallback for WebViews without WASM SIMD.
+      - name: Build WASM (SIMD + scalar)
+        run: scripts/build-wasm.sh
 
       - name: Verify artifacts
         run: |
           test -f npm/dist/paulstretch.js
           test -f npm/dist/paulstretch.wasm
+          test -f npm/dist/paulstretch.nosimd.wasm
           ls -la npm/dist/
 
-      # Only the SIMD=ON build (the production artifact) is packed; SIMD=OFF
-      # is just a build-compatibility check.
       - name: npm pack (verify package layout)
-        if: matrix.simd == 'ON'
         working-directory: npm
         run: |
           npm pack --dry-run
@@ -90,34 +77,37 @@ jobs:
           ls -la *.tgz
 
       - name: Upload npm tarball
-        if: matrix.simd == 'ON'
         uses: actions/upload-artifact@v4
         with:
           name: paulstretch-wasm-npm
           path: npm/*.tgz
           if-no-files-found: error
 
-      # Confirm the WASM actually loads and runs in a real browser, not just
-      # in Node. Uses the pre-installed Google Chrome on ubuntu runners.
+      # Confirm the WASM actually loads and runs in a real browser, not just in
+      # Node — once per wasm binary (SIMD and scalar) via the shared glue.
       - name: Browser smoke test (headless Chrome)
-        if: matrix.simd == 'ON'
         run: |
           set -e
-          cp npm/dist/paulstretch.js npm/dist/paulstretch.wasm tests/browser/
-          python3 -m http.server 8765 --directory tests/browser >/dev/null 2>&1 &
-          SERVER=$!
-          # Give the server a moment to bind.
-          for i in $(seq 1 10); do
-            curl -sf http://localhost:8765/index.html >/dev/null && break
-            sleep 0.5
+          for wasm in paulstretch.wasm paulstretch.nosimd.wasm; do
+            echo "::group::browser smoke test — $wasm"
+            rm -rf tests/browser/paulstretch.wasm
+            cp npm/dist/paulstretch.js tests/browser/
+            cp "npm/dist/$wasm" tests/browser/paulstretch.wasm
+            python3 -m http.server 8765 --directory tests/browser >/dev/null 2>&1 &
+            SERVER=$!
+            for i in $(seq 1 10); do
+              curl -sf http://localhost:8765/index.html >/dev/null && break
+              sleep 0.5
+            done
+            DOM=$(google-chrome --headless=new --disable-gpu --no-sandbox \
+                    --virtual-time-budget=10000 \
+                    --dump-dom http://localhost:8765/index.html)
+            kill $SERVER 2>/dev/null || true
+            echo "$DOM"
+            echo "$DOM" | grep -q 'data-status="ok"' || {
+              echo "::error::browser smoke test FAILED for $wasm — expected data-status=\"ok\" in DOM"
+              exit 1
+            }
+            echo "::endgroup::"
           done
-          DOM=$(google-chrome --headless=new --disable-gpu --no-sandbox \
-                  --virtual-time-budget=10000 \
-                  --dump-dom http://localhost:8765/index.html)
-          kill $SERVER 2>/dev/null || true
-          echo "$DOM"
-          echo "$DOM" | grep -q 'data-status="ok"' || {
-            echo "::error::browser smoke test FAILED — expected data-status=\"ok\" in DOM"
-            exit 1
-          }
 
